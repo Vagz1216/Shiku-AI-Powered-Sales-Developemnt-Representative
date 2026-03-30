@@ -1,23 +1,16 @@
 """Webhook server for AgentMail events with intent-based processing."""
 
 import asyncio
-import sys
-from pathlib import Path
 import logging
 from fastapi import FastAPI, Request, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Dict, Any
-
-# Add project root to path for config import
-_PROJECT_ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(_PROJECT_ROOT))
 
 from config import settings
 from .agent import email_monitor
 
-
 logging.basicConfig(
-    level=getattr(logging, settings.log_level, logging.INFO),
+    level=getattr(logging, settings.log_level.upper(), logging.INFO),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
@@ -27,9 +20,9 @@ app = FastAPI(title="Email Monitor", description="AgentMail webhook handler with
 
 class WebhookEvent(BaseModel):
     """AgentMail webhook event structure."""
-    event_type: str
-    event_id: str
-    message: Dict[str, Any]
+    event_type: str = Field(..., description="Type of event, e.g. message.received")
+    event_id: str = Field(..., description="Unique identifier for the event")
+    message: Dict[str, Any] = Field(..., description="Message payload")
 
 
 @app.post("/webhook")
@@ -78,7 +71,7 @@ async def root() -> Dict[str, str]:
     """Root endpoint."""
     return {
         "service": "Email Monitor",
-        "version": "2.0.0",
+        "version": "1.0.0",
         "webhook": "/webhook",
         "health": "/health"
     }

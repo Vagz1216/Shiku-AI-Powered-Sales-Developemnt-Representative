@@ -1,97 +1,65 @@
 #!/usr/bin/env python3
-"""Setup and manage email monitor webhooks."""
+"""Setup instructions for AgentMail webhook configuration."""
 
 import argparse
-import sys
-from pathlib import Path
-
-# Add project root to path  
-project_root = Path(__file__).parent
-sys.path.insert(0, str(project_root))
-
-from email_monitor import WebhookManager
 
 
-def cmd_setup(webhook_url: str):
-    """Set up a new webhook."""
-    try:
-        manager = WebhookManager()
-        webhook_id = manager.setup_webhook(webhook_url)
-        print(f"✅ Webhook created successfully!")
-        print(f"   Webhook ID: {webhook_id}")
-        print(f"   URL: {webhook_url}")
-        print(f"   Listening for: message.received events")
-        
-    except Exception as e:
-        print(f"❌ Failed to setup webhook: {e}")
-        sys.exit(1)
+def show_setup_instructions():
+    """Show webhook setup instructions."""
+    print("🔗 AgentMail Webhook Setup Instructions")
+    print("=" * 40)
+    print()
+    print("1. Log into your AgentMail dashboard")
+    print("2. Navigate to Settings → Webhooks")
+    print("3. Click 'Add Webhook'")
+    print("4. Configure:")
+    print(f"   • URL: https://your-domain.com/webhook")
+    print(f"   • Events: message.received") 
+    print(f"   • Inbox: Select your inbox")
+    print("5. Save the webhook")
+    print()
+    print("💡 For local development:")
+    print("   • Use ngrok: ngrok http 8000")
+    print("   • Then use: https://abc123.ngrok.io/webhook")
+    print()
+    print("✅ Once configured, start the server:")
+    print("   python run_email_monitor.py")
 
 
-def cmd_list():
-    """List existing webhooks."""
-    try:
-        manager = WebhookManager()
-        webhooks = manager.list_webhooks()
-        
-        if not webhooks:
-            print("No webhooks found")
-            return
-            
-        print(f"Found {len(webhooks)} webhook(s):")
-        for wh in webhooks:
-            status = "✅ enabled" if wh["enabled"] else "❌ disabled"
-            print(f"  {wh['id']}: {wh['url']} ({status})")
-            
-    except Exception as e:
-        print(f"❌ Failed to list webhooks: {e}")
-        sys.exit(1)
-
-
-def cmd_delete(webhook_id: str):
-    """Delete a webhook."""
-    try:
-        manager = WebhookManager()
-        success = manager.delete_webhook(webhook_id)
-        
-        if success:
-            print(f"✅ Webhook {webhook_id} deleted successfully")
-        else:
-            print(f"❌ Failed to delete webhook {webhook_id}")
-            sys.exit(1)
-            
-    except Exception as e:
-        print(f"❌ Failed to delete webhook: {e}")
-        sys.exit(1)
+def show_ngrok_instructions():
+    """Show ngrok setup instructions."""
+    print("🌐 Local Development with Ngrok")
+    print("=" * 32)
+    print()
+    print("1. Install ngrok: https://ngrok.com/download")
+    print("2. Start your email monitor server:")
+    print("   python run_email_monitor.py")
+    print("3. In another terminal, start ngrok:")
+    print("   ngrok http 8000")
+    print("4. Copy the HTTPS URL (e.g., https://abc123.ngrok.io)")
+    print("5. In AgentMail dashboard, set webhook URL to:")
+    print("   https://abc123.ngrok.io/webhook")
+    print()
+    print("🔥 Your webhook is now ready for testing!")
 
 
 def main():
     """Main CLI interface."""
-    parser = argparse.ArgumentParser(description="Email Monitor Webhook Manager")
-    subparsers = parser.add_subparsers(dest="command", help="Commands")
-    
-    # Setup command
-    setup_parser = subparsers.add_parser("setup", help="Setup new webhook")
-    setup_parser.add_argument("url", help="Webhook URL (e.g., https://your-domain.com/webhook)")
-    
-    # List command
-    subparsers.add_parser("list", help="List existing webhooks")
-    
-    # Delete command
-    delete_parser = subparsers.add_parser("delete", help="Delete webhook")
-    delete_parser.add_argument("id", help="Webhook ID to delete")
+    parser = argparse.ArgumentParser(description="AgentMail Webhook Setup Guide")
+    parser.add_argument(
+        "command", 
+        nargs="?",
+        choices=["setup", "ngrok"], 
+        default="setup",
+        help="Show setup instructions (setup) or ngrok guide (ngrok)"
+    )
     
     args = parser.parse_args()
     
-    if not args.command:
-        parser.print_help()
-        return
-    
-    if args.command == "setup":
-        cmd_setup(args.url)
-    elif args.command == "list":
-        cmd_list()
-    elif args.command == "delete":
-        cmd_delete(args.id)
+    if args.command == "ngrok":
+        show_ngrok_instructions()
+    else:
+        show_setup_instructions()
 
 
 if __name__ == "__main__":

@@ -2,7 +2,6 @@
 
 from .agent import EmailMonitorSystem, EmailIntent, EmailActionResult, IntentExtractorAgent, EmailResponseAgent, email_monitor
 from .server import app
-from .webhook_manager import WebhookManager
 
 __all__ = [
     "EmailMonitorSystem",
@@ -11,6 +10,5 @@ __all__ = [
     "IntentExtractorAgent",
     "EmailResponseAgent",
     "email_monitor",
-    "app",
-    "WebhookManager"
+    "app"
 ]

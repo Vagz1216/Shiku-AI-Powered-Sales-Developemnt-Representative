@@ -12,12 +12,14 @@ class AppConfig(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=False,
         frozen=True,
+        extra="ignore",  # Ignore extra fields instead of raising errors
     )
 
     # Core settings
     debug: bool = False
     log_level: str = "info"
     app_name: str = "Squad3"
+    port: int = 8000
 
     # Database & Cache
     database_url: str | None = None
