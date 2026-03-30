@@ -2,68 +2,14 @@
 
 from typing import Dict, Any
 import logging
-from pydantic import BaseModel
 from agentmail import AgentMail
 
 from config import settings
 from agents import Agent, ModelSettings, Runner, function_tool
+from tools import send_reply_email
+from schema import EmailIntent, EmailActionResult
 
 logger = logging.getLogger(__name__)
-
-
-class EmailIntent(BaseModel):
-    """Structured intent classification result."""
-    intent: str  # meeting_request | question | opt_out | interest | neutral | bounce | spam
-    confidence: float  # 0.0 - 1.0
-
-
-class EmailActionResult(BaseModel):
-    """Result of email processing action."""
-    action_taken: str
-    success: bool
-    message_id: str | None = None
-    thread_id: str | None = None
-    error: str | None = None
-
-
-@function_tool
-def send_reply_email(to_email: str, subject: str, message: str, thread_id: str = None) -> Dict[str, Any]:
-    """Send email reply via AgentMail.
-    
-    Args:
-        to_email: Recipient email address
-        subject: Email subject line
-        message: Email message content
-        thread_id: Thread ID to reply to (optional)
-        
-    Returns:
-        Dict with send result
-    """
-    from agentmail import AgentMail
-    
-    try:
-        client = AgentMail(api_key=settings.agentmail_api_key)
-        
-        send_kwargs = {
-            'to': to_email,
-            'subject': subject,
-            'text': message,
-        }
-        
-        if thread_id:
-            send_kwargs['thread_id'] = thread_id
-        
-        response = client.inboxes.messages.send(settings.agentmail_inbox_id, **send_kwargs)
-        
-        return {
-            'success': True,
-            'message_id': str(response.message_id),
-            'thread_id': str(response.thread_id)
-        }
-        
-    except Exception as e:
-        logger.error(f"Failed to send email: {e}")
-        return {'success': False, 'error': str(e)}
 
 
 class IntentExtractorAgent:

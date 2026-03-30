@@ -3,10 +3,10 @@
 import asyncio
 import logging
 from fastapi import FastAPI, Request, HTTPException
-from pydantic import BaseModel, Field
 from typing import Dict, Any
 
 from config import settings
+from schema import WebhookEvent
 from .agent import email_monitor
 
 logging.basicConfig(
@@ -16,13 +16,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Email Monitor", description="AgentMail webhook handler with intent analysis")
-
-
-class WebhookEvent(BaseModel):
-    """AgentMail webhook event structure."""
-    event_type: str = Field(..., description="Type of event, e.g. message.received")
-    event_id: str = Field(..., description="Unique identifier for the event")
-    message: Dict[str, Any] = Field(..., description="Message payload")
 
 
 @app.post("/webhook")

@@ -5,18 +5,10 @@ from email.utils import formataddr
 
 from agentmail import AgentMail
 from agentmail.core.api_error import ApiError
-from pydantic import BaseModel
 
 from config import settings
 from agents import function_tool
-
-
-class SendEmailResult(BaseModel):
-    """Result of sending an email."""
-    ok: bool
-    message_id: str | None = None
-    thread_id: str | None = None
-    error: str | None = None
+from schema import SendEmailResult
 
 
 @function_tool
