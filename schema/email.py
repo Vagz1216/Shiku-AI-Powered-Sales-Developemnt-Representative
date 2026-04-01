@@ -23,3 +23,9 @@ class WebhookEvent(BaseModel):
     event_type: str = Field(..., description="Type of event, e.g. message.received")
     event_id: str = Field(..., description="Unique identifier for the event")
     message: dict = Field(..., description="Message payload")
+
+
+class ResponseEvaluation(BaseModel):
+    """Structured response evaluation result."""
+    approved: bool = Field(description="Whether the response is approved for sending")
+    reason: str = Field(description="Brief explanation of the approval or rejection decision")

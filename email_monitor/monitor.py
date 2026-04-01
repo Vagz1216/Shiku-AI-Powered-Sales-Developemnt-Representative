@@ -6,8 +6,11 @@ from agentmail import AgentMail
 
 from config import settings
 from schema import EmailActionResult
+from agents import Trace, gen_trace_id
 from .intent_extractor import IntentExtractorAgent
 from .email_response import EmailResponseAgent
+from .response_evaluator import ResponseEvaluator
+from .email_sender import EmailSenderAgent
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +21,8 @@ class EmailMonitorSystem:
     def __init__(self):
         self.intent_extractor = IntentExtractorAgent()
         self.response_agent = EmailResponseAgent()
+        self.response_evaluator = ResponseEvaluator()
+        self.email_sender = EmailSenderAgent()
         self._agentmail_client = None
     
     @property
@@ -74,38 +79,83 @@ class EmailMonitorSystem:
             return f"Unable to fetch conversation history: {str(e)}"
     
     async def process_incoming_email(self, email_data: Dict[str, Any]) -> EmailActionResult:
-        """Process incoming email with intent analysis and appropriate response."""
-        try:
-            sender_email = email_data.get('from_', [''])[0]
-            subject = email_data.get('subject', '')
-            content = email_data.get('text', '') or email_data.get('preview', '')
-            thread_id = email_data.get('thread_id')
-            
-            logger.info(f"Processing email from {sender_email}: {subject}")
-            
-            # Extract intent first
-            intent = await self.intent_extractor.extract_intent(content, subject)
-            logger.info(f"Extracted intent: {intent.intent} (confidence: {intent.confidence})")
-            
-            # Fetch conversation history from email thread
-            conversation_history = await self.fetch_conversation_history(thread_id) if thread_id else "No thread ID - likely first message."
-            logger.debug(f"Conversation history length: {len(conversation_history)} chars")
-            
-            # Generate response based on intent
-            result = await self.response_agent.generate_response(
-                email_data, intent, conversation_history
-            )
-            
-            logger.info(f"Action taken: {result.action_taken} (success: {result.success})")
-            return result
-            
-        except Exception as e:
-            logger.error(f"Error processing email: {e}")
-            return EmailActionResult(
-                action_taken="error",
-                success=False,
-                error=str(e)
-            )
+        """Simple linear pipeline: Intent → Generate → Evaluate → Send if approved."""
+        # Create a single trace for the entire email processing pipeline
+        trace_id = gen_trace_id()
+        sender_email = email_data.get('from_', [''])[0]
+        subject = email_data.get('subject', '')
+        
+        with Trace(
+            name="email_processing_pipeline",
+            trace_id=trace_id,
+            inputs={"sender": sender_email, "subject": subject}
+        ):
+            try:
+                content = email_data.get('text', '') or email_data.get('preview', '')
+                thread_id = email_data.get('thread_id')
+                
+                logger.info(f"Processing email from {sender_email}: {subject}")
+                
+                # Step 1: Extract intent
+                intent = await self.intent_extractor.extract_intent(content, subject)
+                logger.info(f"Intent: {intent.intent} (confidence: {intent.confidence})")
+                
+                # Step 2: Get conversation context
+                conversation_history = await self.fetch_conversation_history(thread_id) if thread_id else ""
+                
+                # Step 3: Generate response
+                response_result = await self.response_agent.generate_response(
+                    email_data, intent, conversation_history
+                )
+                
+                # Handle skipped responses
+                if response_result["action"] == "skipped":
+                    result = EmailActionResult(
+                        action_taken="skipped",
+                        success=True,
+                        error=response_result.get("reason")
+                    )
+                    logger.info(f"Email processing result: {result.action_taken}")
+                    return result
+                
+                if response_result["action"] != "generated":
+                    result = EmailActionResult(
+                        action_taken="error",
+                        success=False,
+                        error=response_result.get("reason", "Failed to generate response")
+                    )
+                    logger.error(f"Email processing error: {result.error}")
+                    return result
+                
+                # Step 4: Evaluate response
+                response_text = response_result["response_text"]
+                evaluation_context = {**email_data, "intent": intent.intent}
+                
+                evaluation = await self.response_evaluator.evaluate_response(
+                    response_text, evaluation_context
+                )
+                
+                # Step 5: Send if approved, otherwise flag for review
+                if evaluation.approved:
+                    result = await self.email_sender.execute_action(response_text, email_data)
+                    logger.info(f"Email processing completed: {result.action_taken}")
+                    return result
+                else:
+                    logger.warning(f"Response rejected: {evaluation.reason}")
+                    result = EmailActionResult(
+                        action_taken="rejected",
+                        success=False,
+                        error=f"Evaluator rejected: {evaluation.reason}"
+                    )
+                    return result
+                
+            except Exception as e:
+                logger.error(f"Error processing email: {e}")
+                return EmailActionResult(
+                    action_taken="error",
+                    success=False,
+                    error=str(e)
+                )
 
 
 # Global system instance
