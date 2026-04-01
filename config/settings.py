@@ -53,6 +53,10 @@ class AppConfig(BaseSettings):
         default=None,
         description="AgentMail inbox identifier"
     )
+    composio_api_key: str | None = Field(
+        default=None,
+        description="Composio API key for tool integrations"
+    )
 
     # Model Parameters - Intent Extraction
     intent_model: str = Field(

@@ -24,6 +24,12 @@ class WebhookEvent(BaseModel):
     event_id: str = Field(..., description="Unique identifier for the event")
     message: dict = Field(..., description="Message payload")
 
+class MeetingResult(BaseModel):
+    """Result of creating a calendar meeting."""
+    success: bool = Field(description="Whether the meeting was successfully created")
+    meeting_link: str | None = Field(None, description="Link to the created meeting if successful")
+    event_id: str | None = Field(None, description="ID of the created calendar event")
+    error: str | None = Field(None, description="Error message if the meeting creation failed")
 
 class ResponseEvaluation(BaseModel):
     """Structured response evaluation result."""

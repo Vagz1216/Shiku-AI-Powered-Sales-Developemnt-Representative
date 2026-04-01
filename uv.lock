@@ -19,25 +19,33 @@ version = "1.0.0"
 source = { virtual = "." }
 dependencies = [
     { name = "agentmail" },
+    { name = "composio" },
+    { name = "composio-openai-agents" },
+    { name = "fastapi" },
     { name = "gradio" },
-    { name = "openai" },
     { name = "openai-agents" },
     { name = "pydantic" },
+    { name = "pydantic-settings" },
     { name = "python-dotenv" },
     { name = "requests" },
     { name = "sqlalchemy" },
+    { name = "uvicorn" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "agentmail" },
+    { name = "composio", specifier = ">=0.5.0" },
+    { name = "composio-openai-agents", specifier = ">=0.5.0" },
+    { name = "fastapi", specifier = ">=0.104.0" },
     { name = "gradio", specifier = ">=5.22.0" },
-    { name = "openai", specifier = ">=1.0.0" },
     { name = "openai-agents", specifier = ">=0.13.2" },
     { name = "pydantic", specifier = ">=2.5.0" },
+    { name = "pydantic-settings", specifier = ">=2.0.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "requests", specifier = ">=2.31.0" },
     { name = "sqlalchemy", specifier = ">=2.0.0" },
+    { name = "uvicorn", specifier = ">=0.24.0" },
 ]
 
 [[package]]
@@ -357,6 +365,53 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/d8/53/6f443c9a4a8358a93a6792e2acffb9d9d5cb0a5cfd8802644b7b1c9a02e4/colorama-0.4.6.tar.gz", hash = "sha256:08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44", size = 27697, upload-time = "2022-10-25T02:36:22.414Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d1/d6/3965ed04c63042e047cb6a3e6ed1a63a35087b6a609aa3a15ed8ac56c221/colorama-0.4.6-py2.py3-none-any.whl", hash = "sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6", size = 25335, upload-time = "2022-10-25T02:36:20.889Z" },
+]
+
+[[package]]
+name = "composio"
+version = "0.11.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "composio-client" },
+    { name = "json-schema-to-pydantic" },
+    { name = "openai" },
+    { name = "pydantic" },
+    { name = "pysher" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/81/77/5e8557041d09b29a960208c560e82c5a79d606396192c9a99b02f79b61dd/composio-0.11.4.tar.gz", hash = "sha256:cb0622fa31926d9ce4f09e4aa7605a7873b4e3e61c7d7d094682025f34a19ebb", size = 170542, upload-time = "2026-03-25T21:47:16.924Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/41/46/ccc66eb27e753db878dcaea5f001543863f8563b7a0fe754da0964de9cff/composio-0.11.4-py3-none-any.whl", hash = "sha256:7362f3a3ef4c71a37bc5e3983daa12531bbbe36d961ee00c3428a572a15b7d00", size = 116357, upload-time = "2026-03-25T21:47:02.682Z" },
+]
+
+[[package]]
+name = "composio-client"
+version = "1.29.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "distro" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "sniffio" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/69/21/f11039315ce859b723f22b5a16bbb9ba53c83568b56621de7136031a5d3c/composio_client-1.29.0.tar.gz", hash = "sha256:5bbc23a47538e9314bb88cdb9144fd270d5a128ce264936a51ab7db51d75801b", size = 220489, upload-time = "2026-03-20T17:39:24.288Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a4/85/66e103d68a20fc602e144fab77746521c9a98f9206dee8984ce69feea61e/composio_client-1.29.0-py3-none-any.whl", hash = "sha256:9910268e77eead235e2b08fc504f2cfd11ad4987d756e260a8ba95f45cbf1b0a", size = 248522, upload-time = "2026-03-20T17:39:23.154Z" },
+]
+
+[[package]]
+name = "composio-openai-agents"
+version = "0.11.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "composio" },
+    { name = "openai-agents" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/bb/43/8e7d100d242e1450f762335dbca24e0ed9d44b21d33ed569abc6362d77f4/composio_openai_agents-0.11.4.tar.gz", hash = "sha256:a0805f66e1b34756a770b7db96334c79c8d8c747d77e6970afb7916bae7ef5cf", size = 3882, upload-time = "2026-03-25T21:47:24.449Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a6/24/9f182c8e4992a889fb620b471f9918cc7be8daad903af4625a6c41c63138/composio_openai_agents-0.11.4-py3-none-any.whl", hash = "sha256:5965c1db4d9b527ca0bf7bca564aa718ed99d86c459cf9f1a07d6c919fc0e47a", size = 4218, upload-time = "2026-03-25T21:47:15.72Z" },
 ]
 
 [[package]]
@@ -780,6 +835,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/d2/73/a009f41c5eed71c49bec53036c4b33555afcdee70682a18c6f66e396c039/jiter-0.13.0-graalpy312-graalpy250_312_native-macosx_11_0_arm64.whl", hash = "sha256:ff732bd0a0e778f43d5009840f20b935e79087b4dc65bd36f1cd0f9b04b8ff7f", size = 303808, upload-time = "2026-02-02T12:37:52.092Z" },
     { url = "https://files.pythonhosted.org/packages/c4/10/528b439290763bff3d939268085d03382471b442f212dca4ff5f12802d43/jiter-0.13.0-graalpy312-graalpy250_312_native-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:ab44b178f7981fcaea7e0a5df20e773c663d06ffda0198f1a524e91b2fde7e59", size = 337384, upload-time = "2026-02-02T12:37:53.582Z" },
     { url = "https://files.pythonhosted.org/packages/67/8a/a342b2f0251f3dac4ca17618265d93bf244a2a4d089126e81e4c1056ac50/jiter-0.13.0-graalpy312-graalpy250_312_native-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:7bb00b6d26db67a05fe3e12c76edc75f32077fb51deed13822dc648fa373bc19", size = 343768, upload-time = "2026-02-02T12:37:55.055Z" },
+]
+
+[[package]]
+name = "json-schema-to-pydantic"
+version = "0.4.11"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/60/d8/423895b918706c80db1cee679c13fbe810200b9a9d9a9442c7a58d35c3f2/json_schema_to_pydantic-0.4.11.tar.gz", hash = "sha256:35448ed711a28dd33396b095c8492939b4925aa30eb31942e9b8e08d04279465", size = 56597, upload-time = "2026-03-09T20:53:55.692Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f3/64/7cfeb8c6d2a5e73e0f8d732032aa62be9a7724c04beb461d677de0b4beb3/json_schema_to_pydantic-0.4.11-py3-none-any.whl", hash = "sha256:da2ccc39d070ee03dbcf0517d16720e3e33f7aa8d61257ace09af8c51bd46348", size = 17842, upload-time = "2026-03-09T20:53:54.576Z" },
 ]
 
 [[package]]
@@ -1341,6 +1408,16 @@ crypto = [
 ]
 
 [[package]]
+name = "pysher"
+version = "1.0.8"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "requests" },
+    { name = "websocket-client" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/12/a0/d0638470df605ce266991fb04f74c69ab1bed3b90ac3838e9c3c8b69b66a/Pysher-1.0.8.tar.gz", hash = "sha256:7849c56032b208e49df67d7bd8d49029a69042ab0bb45b2ed59fa08f11ac5988", size = 9071, upload-time = "2022-10-10T13:41:09.936Z" }
+
+[[package]]
 name = "python-dateutil"
 version = "2.9.0.post0"
 source = { registry = "https://pypi.org/simple" }
@@ -1782,6 +1859,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/e3/ad/4a96c425be6fb67e0621e62d86c402b4a17ab2be7f7c055d9bd2f638b9e2/uvicorn-0.42.0.tar.gz", hash = "sha256:9b1f190ce15a2dd22e7758651d9b6d12df09a13d51ba5bf4fc33c383a48e1775", size = 85393, upload-time = "2026-03-16T06:19:50.077Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/0a/89/f8827ccff89c1586027a105e5630ff6139a64da2515e24dafe860bd9ae4d/uvicorn-0.42.0-py3-none-any.whl", hash = "sha256:96c30f5c7abe6f74ae8900a70e92b85ad6613b745d4879eb9b16ccad15645359", size = 68830, upload-time = "2026-03-16T06:19:48.325Z" },
+]
+
+[[package]]
+name = "websocket-client"
+version = "1.9.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/2c/41/aa4bf9664e4cda14c3b39865b12251e8e7d239f4cd0e3cc1b6c2ccde25c1/websocket_client-1.9.0.tar.gz", hash = "sha256:9e813624b6eb619999a97dc7958469217c3176312b3a16a4bd1bc7e08a46ec98", size = 70576, upload-time = "2025-10-07T21:16:36.495Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/34/db/b10e48aa8fff7407e67470363eac595018441cf32d5e1001567a7aeba5d2/websocket_client-1.9.0-py3-none-any.whl", hash = "sha256:af248a825037ef591efbf6ed20cc5faa03d3b47b9e5a2230a529eeee1c1fc3ef", size = 82616, upload-time = "2025-10-07T21:16:34.951Z" },
 ]
 
 [[package]]

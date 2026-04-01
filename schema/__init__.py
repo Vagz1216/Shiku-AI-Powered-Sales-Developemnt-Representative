@@ -1,6 +1,6 @@
 """Pydantic schemas for the Squad3 application."""
 
-from .email import EmailIntent, EmailActionResult, WebhookEvent, ResponseEvaluation
+from .email import EmailIntent, EmailActionResult, WebhookEvent, ResponseEvaluation, MeetingResult
 from .tools import SendEmailResult
 
 __all__ = [
@@ -8,5 +8,6 @@ __all__ = [
     "EmailActionResult", 
     "WebhookEvent",
     "ResponseEvaluation",
+    "MeetingResult",
     "SendEmailResult"
 ]

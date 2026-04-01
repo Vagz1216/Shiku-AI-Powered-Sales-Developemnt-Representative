@@ -5,6 +5,7 @@ from typing import Dict, Any
 
 from agents import Agent, ModelSettings, Runner
 from tools import send_reply_email
+from tools.google_calendar import create_google_meeting
 from schema import EmailActionResult
 from config import settings
 
@@ -18,18 +19,26 @@ class EmailSenderAgent:
         self.agent = Agent(
             name="EmailSenderAgent",
             instructions="""
-You are a professional email handling agent. Based on the approved response and email context, take appropriate actions.
+You are a professional email and meeting agent. Based on the approved response and email context, take appropriate actions.
 
 Your available actions:
-- Send email replies using send_reply_email tool
-- (Future: Create calendar meetings, send notifications, etc.)
+- Send email replies using send_reply_email tool  
+- Create Google Calendar meetings using create_google_meeting tool
 
-Always use the exact approved response text provided - do not modify it.
-For email replies, use the send_reply_email tool with appropriate parameters.
+Guidelines:
+1. Always send the approved response using send_reply_email tool
+2. If the response mentions scheduling a meeting or call, also use create_google_meeting tool to create the calendar event
+3. For meetings, include all attendees in a list format, suggest reasonable times (business hours, 30-60 minutes duration)
+4. When creating meetings, always include the original sender's email in the attendees list
 
-If the email requires scheduling a meeting, mention this in your response for future tool integration.
+Examples:
+- Simple reply: Just use send_reply_email
+- Reply mentioning "let's schedule a call": Use both send_reply_email AND create_google_meeting
+- Meeting request: Use both tools to reply and schedule
+
+Always execute the appropriate combination of tools based on the approved response content.
 """,
-            tools=[send_reply_email],
+            tools=[send_reply_email, create_google_meeting],
             model_settings=ModelSettings(
                 model=settings.response_model,
                 temperature=0.3,  # Lower temperature for precise execution
@@ -55,7 +64,13 @@ EMAIL CONTEXT:
 - Subject: {subject}  
 - Thread ID: {thread_id}
 
-Execute the appropriate action to send this approved response. Use send_reply_email tool to reply to this email.
+INSTRUCTIONS:
+1. Always send the approved response using send_reply_email tool
+2. If the response mentions scheduling a meeting/call, also use schedule_meeting tool
+3. For meetings, suggest reasonable business hours (e.g., "2026-04-15 14:00" for 2 PM)
+4. Use 30-60 minute durations for most meetings
+
+Execute the appropriate combination of tools based on the approved response content.
 """
         
         try:
