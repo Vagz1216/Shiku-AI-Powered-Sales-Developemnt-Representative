@@ -1,10 +1,13 @@
 import os
 import sqlite3
 from typing import Optional
+from config.settings import AppConfig
+
+settings = AppConfig()
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 DB_DIR = os.path.join(ROOT, 'db')
-DB_FILE = os.path.join(DB_DIR, 'database.sqlite3')
+DEFAULT_DB_FILE = os.path.join(DB_DIR, 'database.sqlite3')
 SCHEMA_FILE = os.path.join(DB_DIR, 'schema.sql')
 SEED_FILE = os.path.join(DB_DIR, 'seed.sql')
 
@@ -19,8 +22,26 @@ def get_conn() -> sqlite3.Connection:
     This function bootstraps the schema (safe to call multiple times) and seeds sample
     data if the database is empty.
     """
-    _ensure_db_dir()
-    conn = sqlite3.connect(DB_FILE, detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES)
+    # Handle both file paths and database URLs
+    if settings.database_url:
+        if settings.database_url.startswith('sqlite:///'):
+            # Extract file path from SQLite URL and make it absolute
+            db_file = settings.database_url.replace('sqlite:///', '')
+            if not os.path.isabs(db_file):
+                db_file = os.path.join(ROOT, db_file)
+        else:
+            # Use the database_url as is (could be a file path)
+            db_file = settings.database_url
+    else:
+        # Default to sqlite file in db directory
+        _ensure_db_dir()
+        db_file = DEFAULT_DB_FILE
+    
+    # Ensure the directory exists for the database file
+    db_dir = os.path.dirname(db_file)
+    os.makedirs(db_dir, exist_ok=True)
+        
+    conn = sqlite3.connect(db_file, detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES)
     conn.row_factory = sqlite3.Row
     conn.execute('PRAGMA foreign_keys = ON')
     conn.execute('PRAGMA journal_mode = WAL')

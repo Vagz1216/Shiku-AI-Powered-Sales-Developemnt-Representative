@@ -15,10 +15,11 @@ project-root/
 ├── packages/
 │   ├── agents/               # All agent workflows
 │   ├── db/                   # DB schema + queries
-│   ├── email/                # Email handling (server + utilities)
+│   ├── mail/                 # Email handling (server + utilities)
 │   ├── integrations/         # External services (Google Meet, etc.)
 │   ├── schema/               # Pydantic declarations
-│   └── shared/               # Types, constants, helpers
+│   ├── shared/               # Types, constants, helpers
+│   └── tools/                # Agent-callable tools (e.g. send email)
 │
 ├── scripts/                  # Dev scripts (seeding, cron triggers, etc.)
 ├── .env

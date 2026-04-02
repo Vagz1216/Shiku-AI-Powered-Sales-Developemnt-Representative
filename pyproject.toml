@@ -10,8 +10,15 @@ dependencies = [
     "gradio>=5.22.0",
     "openai-agents>=0.13.2",
     "agentmail",
-    "openai>=1.0.0",
-    "requests>=2.31.0"
+    "requests>=2.31.0",
+    "fastapi>=0.104.0",
+    "uvicorn>=0.24.0",
+    "pydantic-settings>=2.0.0"
 ]
+
+[project.scripts]
+run-email-monitor = "run_email_monitor:main"
+setup-webhook = "setup_webhook:main"
+test-email-monitor = "test_email_monitor:main"
 
 [project.optional-dependencies]

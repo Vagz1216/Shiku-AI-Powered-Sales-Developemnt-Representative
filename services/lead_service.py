@@ -129,3 +129,14 @@ def log_event(event_type: str, payload: Optional[str] = None, metadata: Optional
         return {"success": True, "data": {"event_id": event_id}, "error": None}
     except Exception as e:
         return {"success": False, "data": None, "error": str(e)}
+
+
+def get_lead(lead_id: Optional[int] = None) -> Optional[dict]:
+    """Return lead name and email by id, or a random lead if id is None."""
+    conn = get_conn()
+    if lead_id:
+        cur = conn.execute("SELECT name, email FROM leads WHERE id = ?", (lead_id,))
+    else:
+        cur = conn.execute("SELECT name, email FROM leads ORDER BY RANDOM() LIMIT 1")
+    row = cur.fetchone()
+    return dict_from_row(row)
