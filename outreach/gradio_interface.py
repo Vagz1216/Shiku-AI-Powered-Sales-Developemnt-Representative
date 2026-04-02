@@ -76,10 +76,10 @@ def execute_campaign_sync() -> Iterator[str]:
 def create_outreach_interface():
     """Create the Gradio interface for outreach campaigns."""
     
-    with gr.Blocks(title="📧 Outreach Campaign Manager") as interface:
+    with gr.Blocks(title="📧 Agent-Driven Outreach Platform") as interface:
         
         gr.Markdown("# 📧 Senior Marketing Agent - Outreach Campaigns")
-        gr.Markdown("Execute intelligent outreach campaigns with AI-powered content generation and evaluation.")
+        gr.Markdown("Execute intelligent outreach campaignscontent generation and evaluation.")
         
         with gr.Row():
             with gr.Column(scale=2):
@@ -105,11 +105,11 @@ def create_outreach_interface():
         with gr.Row():
             gr.Markdown("### 📊 Campaign Workflow")
             gr.Markdown("""
-            1. **get_campaign_tool** - Retrieve random campaign from database
-            2. **get_lead_tool** - Find eligible lead for outreach  
-            3. **Content Generation** - Call professional, engaging & concise email tools
-            4. **AI Evaluation** - Agent selects the most effective email
-            5. **send_agent_email** - Deliver personalized email to lead
+            1. Retrieve random campaign from database
+            2. Find eligible lead for outreach  
+            3. Content Generation
+            4. AI Evaluation
+            5. Deliver personalized email to lead
             """)
         
         # Event handlers

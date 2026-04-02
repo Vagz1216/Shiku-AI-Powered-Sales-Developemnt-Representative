@@ -8,7 +8,9 @@ import asyncio
 import logging
 from typing import Dict, Any
 from fastapi import FastAPI, Request, HTTPException
+from starlette.middleware.base import BaseHTTPMiddleware
 import gradio as gr
+import time
 
 from config.logging import setup_logging
 from config import settings
@@ -20,11 +22,35 @@ from outreach.gradio_interface import create_outreach_interface
 setup_logging()
 logger = logging.getLogger(__name__)
 
+# HTTP Access Logging Middleware
+class AccessLogMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        start_time = time.time()
+        
+        # Log the request
+        logger.info(f"Request: {request.method} {request.url}")
+        
+        response = await call_next(request)
+        
+        # Calculate processing time
+        process_time = time.time() - start_time
+        
+        # Log the response
+        logger.info(
+            f"Response: {request.method} {request.url.path} - "
+            f"{response.status_code} - {process_time:.3f}s"
+        )
+        
+        return response
+
 app = FastAPI(
     title="Squad3 API", 
     description="Outreach and Email Monitoring System",
     version="1.0.0"
 )
+
+# Add access logging middleware
+app.add_middleware(AccessLogMiddleware)
 
 
 # Health endpoints
@@ -35,7 +61,7 @@ def health() -> Dict[str, str]:
 
 
 @app.get("/")
-async def root() -> Dict[str, str]:
+async def root() -> Dict[str, Any]:
     """Root endpoint with API overview."""
     return {
         "service": "Squad3 API",
