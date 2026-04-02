@@ -132,7 +132,7 @@ def log_event(event_type: str, payload: Optional[str] = None, metadata: Optional
 
 
 def get_lead(lead_id: Optional[int] = None) -> Optional[dict]:
-    """Return lead name and email by id, or a random lead if id is None."""
+    """Return lead information including name, email, company, industry, and pain_points by id, or a random lead if id is None."""
     conn = get_conn()
     if lead_id:
         cur = conn.execute("SELECT name, email FROM leads WHERE id = ?", (lead_id,))
