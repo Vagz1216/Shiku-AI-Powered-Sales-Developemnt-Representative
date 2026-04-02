@@ -4,7 +4,7 @@ import logging
 import json        
 from config.logging import setup_logging
 from agents import function_tool
-from tools.send_email import send_agent_email
+from tools.send_email import send_plain_email
 from schema import SendEmailResult, MeetingDetails
 
 # Setup logging
@@ -53,10 +53,10 @@ The client has been sent a calendar invitation. Please review your calendar and 
 If you need to reschedule or have any questions, please contact the client directly.
 
 Best regards,
-Automated Meeting System"""
+Team Coordination"""
 
         # Send notification to staff
-        result = send_agent_email(
+        result = send_plain_email(
             email=staff_email,
             name="Team Member",
             subject=staff_subject,

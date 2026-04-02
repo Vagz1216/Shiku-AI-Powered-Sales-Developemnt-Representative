@@ -23,6 +23,7 @@ class ResponseEvaluator:
     def __init__(self):
         self.agent = Agent(
             name="EmailResponseEvaluator",
+            model=settings.intent_model, 
             instructions="""
 You are an email response quality evaluator. Your job is simple: determine if an email response is safe and appropriate to send.
 
@@ -35,7 +36,6 @@ Evaluate the response for:
 Return a simple pass/fail decision with brief reasoning.
 """,
             model_settings=ModelSettings(
-                model=settings.intent_model,  # Reuse same model as intent extraction
                 temperature=0.2,  # Low temperature for consistent evaluation  
                 max_tokens=200
             ),

@@ -32,6 +32,7 @@ class EmailSenderAgent:
     def __init__(self):
         self.agent = Agent(
             name="EmailSenderAgent",
+            model=settings.response_model,
             instructions="""
 You are an email and meeting coordination agent. Execute actions based on the approved response.
 
@@ -60,7 +61,6 @@ Execute tools in sequence for meeting scenarios.
                 notify_staff_about_meeting
             ],
             model_settings=ModelSettings(
-                model=settings.response_model,
                 temperature=0.3,  # Lower temperature for precise execution
                 max_tokens=500
             )

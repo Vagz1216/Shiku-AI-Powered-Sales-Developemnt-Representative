@@ -23,6 +23,7 @@ class IntentExtractorAgent:
     def __init__(self):
         self.agent = Agent(
             name="EmailIntentExtractor",
+            model=settings.intent_model,
             instructions="""
 Analyze email content and classify the sender's intent with confidence.
 
@@ -38,7 +39,6 @@ Classify into one of these intents:
 Provide confidence score 0.0-1.0 based on clarity of intent.
 """,
             model_settings=ModelSettings(
-                model=settings.intent_model,
                 temperature=settings.intent_temperature,
                 max_tokens=settings.intent_max_tokens
             ),

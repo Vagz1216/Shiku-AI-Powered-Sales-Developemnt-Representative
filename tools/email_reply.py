@@ -62,8 +62,10 @@ def send_reply_email(to_email: str, message: str, thread_id: str = None, subject
         if subject:
             send_kwargs['subject'] = subject
         
-        if thread_id:
-            send_kwargs['thread_id'] = thread_id
+        # Note: AgentMail API doesn't accept thread_id in send method
+        # Threading is handled automatically by the service based on subject and recipients
+        # if thread_id:
+        #     send_kwargs['thread_id'] = thread_id
         
         response = client.inboxes.messages.send(settings.agentmail_inbox_id, **send_kwargs)
         

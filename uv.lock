@@ -20,6 +20,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "agentmail" },
     { name = "composio" },
+    { name = "composio-openai" },
     { name = "composio-openai-agents" },
     { name = "fastapi" },
     { name = "gradio" },
@@ -42,6 +43,7 @@ dev = [
 requires-dist = [
     { name = "agentmail" },
     { name = "composio", specifier = ">=0.5.0" },
+    { name = "composio-openai", specifier = ">=0.11.4" },
     { name = "composio-openai-agents", specifier = ">=0.5.0" },
     { name = "fastapi", specifier = ">=0.104.0" },
     { name = "gradio", specifier = ">=5.22.0" },
@@ -408,6 +410,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/69/21/f11039315ce859b723f22b5a16bbb9ba53c83568b56621de7136031a5d3c/composio_client-1.29.0.tar.gz", hash = "sha256:5bbc23a47538e9314bb88cdb9144fd270d5a128ce264936a51ab7db51d75801b", size = 220489, upload-time = "2026-03-20T17:39:24.288Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a4/85/66e103d68a20fc602e144fab77746521c9a98f9206dee8984ce69feea61e/composio_client-1.29.0-py3-none-any.whl", hash = "sha256:9910268e77eead235e2b08fc504f2cfd11ad4987d756e260a8ba95f45cbf1b0a", size = 248522, upload-time = "2026-03-20T17:39:23.154Z" },
+]
+
+[[package]]
+name = "composio-openai"
+version = "0.11.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "composio" },
+    { name = "openai" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c7/2c/4f525a075556284b8c20d55e6cf5bbcec81a319aa0965ebb4b573a594c73/composio_openai-0.11.4.tar.gz", hash = "sha256:876b23924b69184b611907592041776f9573d7265ac2040cadbb0e675da3545f", size = 2742, upload-time = "2026-03-25T21:47:23.909Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8a/5d/6f6c31a79ab08f468f0d3f3e7ca3f05e51d3995874e268d0736fa6e357d0/composio_openai-0.11.4-py3-none-any.whl", hash = "sha256:b91a6e228f8d997068208c390de023674770f6ba7452bc0634dc30dc47f6b99c", size = 2995, upload-time = "2026-03-25T21:47:14.718Z" },
 ]
 
 [[package]]

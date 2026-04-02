@@ -23,6 +23,7 @@ class EmailResponseAgent:
     def __init__(self):
         self.agent = Agent(
             name="EmailResponseAgent",
+            model=settings.response_model,
             instructions="""
 You are a professional business development assistant crafting strategic email responses.
 
@@ -36,9 +37,13 @@ Analyze the email intent and generate an appropriate response:
 
 For valid intents (confidence >= 0.3), generate professional responses (2-3 paragraphs max).
 For low confidence or unwanted intents, set action to "skipped" with reason.
+
+IMPORTANT: Always end emails with this professional signature:
+Best regards,
+Business Development Team
+Euclid Squad3 Solutions
 """,
             model_settings=ModelSettings(
-                model=settings.response_model,
                 temperature=settings.response_temperature,
                 max_tokens=settings.response_max_tokens
             ),

@@ -74,6 +74,10 @@ class AppConfig(BaseSettings):
         default=None,
         description="Composio API key for tool integrations"
     )
+    composio_user_id: str = Field(
+        default=None,
+        description="Composio user ID for consistent session management"
+    )
 
     # Model Parameters - Intent Extraction
     intent_model: str = Field(
