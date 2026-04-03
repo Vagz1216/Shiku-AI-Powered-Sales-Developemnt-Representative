@@ -1,0 +1,33 @@
+# Python
+__pycache__
+*.pyc
+.venv
+venv/
+.env*
+
+# Git and editors
+.git
+.vscode/
+.idea/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Docker
+Dockerfile*
+.dockerignore
+docker-compose*
+
+# Documentation
+README.md
+*.md
+docs/
+
+# Development
+.pytest_cache
+.coverage
+tests/
+logs/
+data/
