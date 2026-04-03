@@ -27,6 +27,9 @@ WORKDIR /app
 # Copy from builder
 COPY --from=builder --chown=user:user /app /app
 
+# Create necessary directories with proper permissions
+RUN mkdir -p logs data db && chown -R user:user /app
+
 # Switch to user
 USER user
 
