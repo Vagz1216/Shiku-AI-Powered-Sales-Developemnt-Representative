@@ -62,8 +62,12 @@ def get_active_campaigns() -> list[CampaignInfo]:
 
 
 @function_tool
-def get_campaign_tool() -> CampaignInfo:
-    """Get one random active campaign directly from database.
+def get_campaign_tool(campaign_name: Optional[str] = None) -> CampaignInfo:
+    """Get campaign details from database.
+    
+    Args:
+        campaign_name: Optional name of the specific campaign to retrieve. 
+                       If None, a random active campaign is chosen.
     
     Returns:
         Campaign information including name, value proposition, and call-to-action
@@ -71,9 +75,15 @@ def get_campaign_tool() -> CampaignInfo:
     try:
         with get_conn() as conn:
             cur = conn.cursor()
-            cur.execute(
-                "SELECT id, name, value_proposition, cta, status FROM campaigns WHERE status = 'ACTIVE' ORDER BY RANDOM() LIMIT 1"
-            )
+            if campaign_name:
+                cur.execute(
+                    "SELECT id, name, value_proposition, cta, status FROM campaigns WHERE name = ? AND status = 'ACTIVE'",
+                    (campaign_name,)
+                )
+            else:
+                cur.execute(
+                    "SELECT id, name, value_proposition, cta, status FROM campaigns WHERE status = 'ACTIVE' ORDER BY RANDOM() LIMIT 1"
+                )
             result = cur.fetchone()
             
             if result:
@@ -85,7 +95,7 @@ def get_campaign_tool() -> CampaignInfo:
                     status=result[4]
                 )
     except Exception as e:
-        logger.error(f"Error fetching random campaign: {e}")
+        logger.error(f"Error fetching campaign: {e}")
     
     # Fallback if no campaigns in database
     return CampaignInfo(

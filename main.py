@@ -6,7 +6,7 @@ Combines outreach and email monitoring functionality.
 
 import asyncio
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from fastapi import FastAPI, Request, HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 import gradio as gr
@@ -78,11 +78,11 @@ async def root() -> Dict[str, Any]:
 
 # Outreach endpoints
 @app.post("/outreach/campaign")  
-async def execute_marketing_campaign() -> dict:
+async def execute_marketing_campaign(campaign_name: Optional[str] = None) -> dict:
     """Execute intelligent outreach campaign via Senior Marketing Agent (database-driven)."""
     try:
         from outreach.marketing_agent import senior_marketing_agent
-        result = await senior_marketing_agent.execute_campaign()
+        result = await senior_marketing_agent.execute_campaign(campaign_name=campaign_name)
         return result
     except Exception as e:
         logger.error(f"Marketing campaign failed: {e}")
@@ -140,3 +140,4 @@ def _is_our_message(message_data: Dict[str, Any]) -> bool:
 # Mount Gradio interface for outreach campaign management
 outreach_interface = create_outreach_interface()
 app = gr.mount_gradio_app(app, outreach_interface, path="/outreach")
+

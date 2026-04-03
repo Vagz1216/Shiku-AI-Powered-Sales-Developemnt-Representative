@@ -60,6 +60,21 @@ class AppConfig(BaseSettings):
         validation_alias="OPENAI_API_KEY",
         description="OpenAI API key for AI model access",
     )
+    openrouter_api_key: str | None = Field(
+        default=None,
+        validation_alias="OPENROUTER_API_KEY",
+        description="OpenRouter API key for fallback AI access",
+    )
+    cerebras_api_key: str | None = Field(
+        default=None,
+        validation_alias="CEREBRAS_API_KEY",
+        description="Cerebras API key for fallback AI access",
+    )
+    groq_api_key: str | None = Field(
+        default=None,
+        validation_alias="GROQ_API_KEY",
+        description="Groq API key for fallback AI access",
+    )
     agentmail_api_key: str | None = Field(
         default=None,
         validation_alias="AGENTMAIL_API_KEY",
@@ -74,7 +89,7 @@ class AppConfig(BaseSettings):
         default=None,
         description="Composio API key for tool integrations"
     )
-    composio_user_id: str = Field(
+    composio_user_id: str | None = Field(
         default=None,
         description="Composio user ID for consistent session management"
     )

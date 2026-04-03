@@ -8,7 +8,7 @@ from agentmail import AgentMail
 from config.logging import setup_logging
 from config import settings
 from schema import EmailActionResult
-from agents import Trace, gen_trace_id
+from agents import trace, gen_trace_id
 from .intent_extractor import IntentExtractorAgent
 from .email_response import EmailResponseAgent
 from .response_evaluator import ResponseEvaluator
@@ -170,10 +170,10 @@ class EmailMonitorSystem:
         sender_email = email_data.get('from_', [''])[0]
         subject = email_data.get('subject', '')
         
-        with Trace(
-            name="email_reply_processing_pipeline",
+        with trace(
+            workflow_name="email_reply_processing_pipeline",
             trace_id=trace_id,
-            inputs={"sender": sender_email, "subject": subject}
+            metadata={"sender": sender_email, "subject": subject}
         ):
             try:
                 content = email_data.get('text', '') or email_data.get('preview', '')

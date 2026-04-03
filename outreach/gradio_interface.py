@@ -3,16 +3,20 @@
 import gradio as gr
 import asyncio
 import logging
-from typing import Iterator, Tuple
+from typing import Iterator, Tuple, List
 from outreach.marketing_agent import senior_marketing_agent
+from tools.campaign_tools import get_active_campaigns
 
 logger = logging.getLogger(__name__)
 
 
-async def execute_campaign_with_progress() -> Iterator[Tuple[str, str]]:
+async def execute_campaign_with_progress(campaign_name: str = None) -> Iterator[Tuple[str, str]]:
     """Execute campaign with streaming progress updates.
     
     The campaign details are automatically retrieved from database via get_campaign_tool.
+        
+    Args:
+        campaign_name: Optional name of the specific campaign to run.
         
     Yields:
         Tuple of (progress_message, status)
@@ -21,7 +25,8 @@ async def execute_campaign_with_progress() -> Iterator[Tuple[str, str]]:
         yield ("🚀 Initializing campaign execution...", "info")
         await asyncio.sleep(0.5)  # Small delay for UI
         
-        yield ("📊 Calling get_campaign_tool: Retrieving campaign from database...", "info") 
+        target = f" campaign '{campaign_name}'" if campaign_name else " a random campaign"
+        yield (f"📊 Calling get_campaign_tool: Retrieving{target} from database...", "info") 
         await asyncio.sleep(0.5)
         
         yield ("👤 Calling get_lead_tool: Fetching eligible lead...", "info")
@@ -36,10 +41,10 @@ async def execute_campaign_with_progress() -> Iterator[Tuple[str, str]]:
         yield ("📤 Calling send_agent_email: Delivering email...", "info")
         
         # Execute the actual campaign (no campaign_brief needed - comes from database)
-        result = await senior_marketing_agent.execute_campaign()
+        result = await senior_marketing_agent.execute_campaign(campaign_name=campaign_name)
         
         if result.get("success"):
-            yield (f"✅ Campaign completed successfully!\\n{result.get('message', '')}", "success")
+            yield (f"✅ Campaign completed successfully!\n{result.get('message', '')}", "success")
         else:
             yield (f"❌ Campaign failed: {result.get('error', 'Unknown error')}", "error")
             
@@ -48,13 +53,13 @@ async def execute_campaign_with_progress() -> Iterator[Tuple[str, str]]:
         yield (f"❌ Execution failed: {str(e)}", "error")
 
 
-def execute_campaign_sync() -> Iterator[str]:
+def execute_campaign_sync(campaign_name: str) -> Iterator[str]:
     """Synchronous wrapper for campaign execution with progress."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     
     try:
-        async_gen = execute_campaign_with_progress()
+        async_gen = execute_campaign_with_progress(campaign_name=campaign_name)
         while True:
             try:
                 progress_msg, status = loop.run_until_complete(async_gen.__anext__())
@@ -73,19 +78,34 @@ def execute_campaign_sync() -> Iterator[str]:
         loop.close()
 
 
+def get_campaign_names() -> List[str]:
+    """Get names of all active campaigns for the dropdown."""
+    campaigns = get_active_campaigns()
+    return [c.name for c in campaigns]
+
+
 def create_outreach_interface():
     """Create the Gradio interface for outreach campaigns."""
     
     with gr.Blocks(title="📧 Agent-Driven Outreach Platform") as interface:
         
         gr.Markdown("# 📧 Senior Marketing Agent - Outreach Campaigns")
-        gr.Markdown("Execute intelligent outreach campaignscontent generation and evaluation.")
+        gr.Markdown("Execute intelligent outreach campaigns with multi-style content generation and AI evaluation.")
         
         with gr.Row():
             with gr.Column(scale=2):
                 gr.Markdown("### 🎯 Automated Campaign Execution")
-                gr.Markdown("Click below to start an automated outreach campaign. The system will:")
-                gr.Markdown("- Select a campaign from database\n- Find an eligible lead\n- Generate 3 email styles\n- Choose the best one\n- Send the email")
+                
+                # Dropdown for campaign selection
+                campaign_dropdown = gr.Dropdown(
+                    choices=get_campaign_names(),
+                    label="Select Campaign",
+                    info="Choose an active campaign to run. If none are listed, ensure campaigns are set to ACTIVE in the database.",
+                    value=get_campaign_names()[0] if get_campaign_names() else None
+                )
+                
+                gr.Markdown("Click below to start the selected outreach campaign. The system will:")
+                gr.Markdown("- Retrieve details for the selected campaign\n- Find an eligible lead\n- Generate 3 email styles\n- Choose the best one\n- Send the email")
                 
                 execute_btn = gr.Button(
                     "🚀 Start Campaign", 
@@ -101,21 +121,10 @@ def create_outreach_interface():
                     interactive=False
                 )
         
-        # Status indicators
-        with gr.Row():
-            gr.Markdown("### 📊 Campaign Workflow")
-            gr.Markdown("""
-            1. Retrieve random campaign from database
-            2. Find eligible lead for outreach  
-            3. Content Generation
-            4. AI Evaluation
-            5. Deliver personalized email to lead
-            """)
-        
         # Event handlers
         execute_btn.click(
             fn=execute_campaign_sync,
-            inputs=[],
+            inputs=[campaign_dropdown],
             outputs=[progress_output],
             show_progress=True
         )
