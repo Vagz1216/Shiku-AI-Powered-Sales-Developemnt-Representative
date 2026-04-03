@@ -14,14 +14,15 @@ logger = logging.getLogger(__name__)
 
 
 @function_tool
-def send_reply_email(to_email: str, message: str, thread_id: str = None, subject: str = None) -> Dict[str, Any]:
-    """Send email reply via AgentMail.
+def send_reply_email(to_email: str, message: str, message_id: str = None, thread_id: str = None, subject: str = None) -> Dict[str, Any]:
+    """Send email reply via AgentMail using proper reply API.
     
     Args:
         to_email: Recipient email address
         message: Email message content
-        thread_id: Thread ID to reply to (optional, but recommended for replies)
-        subject: Email subject line (optional, will auto-generate "Re: Original Subject" if not provided)
+        message_id: Original message ID to reply to (preferred for proper threading)
+        thread_id: Thread ID for context (fallback option)
+        subject: Email subject line (optional, auto-generated for replies)
         
     Returns:
         Dict with send result
@@ -29,50 +30,57 @@ def send_reply_email(to_email: str, message: str, thread_id: str = None, subject
     try:
         client = AgentMail(api_key=settings.agentmail_api_key)
         
+        # If we have message_id, use the proper reply API (preferred)
+        if message_id:
+            logger.info(f"Sending reply to message {message_id}")
+            response = client.inboxes.messages.reply(
+                inbox_id=settings.agentmail_inbox_id,
+                message_id=message_id,
+                text=message
+            )
+            
+            return {
+                'success': True,
+                'message_id': str(response.message_id),
+                'thread_id': str(response.thread_id),
+                'method': 'reply'
+            }
+        
+        # Fallback: send new message (less ideal for threading)
+        logger.warning(f"No message_id provided, sending new message to {to_email}")
         send_kwargs = {
             'to': to_email,
             'text': message,
         }
         
-        # If thread_id provided but no subject, try to get original subject
-        if thread_id and not subject:
+        # Handle subject for new messages
+        if subject:
+            send_kwargs['subject'] = subject
+        elif thread_id:
+            # Try to get thread info for better subject
             try:
-                # Fetch thread to get original subject
-                thread_response = client.inboxes.threads.list_messages(
-                    inbox_id=settings.agentmail_inbox_id,
-                    thread_id=thread_id,
-                    limit=1,
-                    order="desc"  # Get most recent message
-                )
-                
-                if thread_response.messages:
-                    original_subject = thread_response.messages[0].subject or "No Subject"
-                    # Add "Re: " prefix if not already present
+                thread = client.threads.get(thread_id=thread_id)
+                if thread.messages:
+                    latest_msg = max(thread.messages, key=lambda x: getattr(x, 'created_at', 0))
+                    original_subject = latest_msg.subject or "Your Message"
                     if not original_subject.lower().startswith('re:'):
                         subject = f"Re: {original_subject}"
                     else:
                         subject = original_subject
-                else:
-                    subject = "Re: Your Message"
+                    send_kwargs['subject'] = subject
             except Exception as e:
-                logger.warning(f"Could not fetch original subject: {e}")
-                subject = "Re: Your Message"
-        
-        # Use provided subject or fallback
-        if subject:
-            send_kwargs['subject'] = subject
-        
-        # Note: AgentMail API doesn't accept thread_id in send method
-        # Threading is handled automatically by the service based on subject and recipients
-        # if thread_id:
-        #     send_kwargs['thread_id'] = thread_id
+                logger.warning(f"Could not fetch thread for subject: {e}")
+                send_kwargs['subject'] = "Re: Your Message"
+        else:
+            send_kwargs['subject'] = "Re: Your Message"
         
         response = client.inboxes.messages.send(settings.agentmail_inbox_id, **send_kwargs)
         
         return {
             'success': True,
             'message_id': str(response.message_id),
-            'thread_id': str(response.thread_id)
+            'thread_id': str(response.thread_id),
+            'method': 'new_message'
         }
         
     except Exception as e:
