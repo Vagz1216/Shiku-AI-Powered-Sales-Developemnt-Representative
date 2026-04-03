@@ -1,7 +1,7 @@
 """Content generation tools with 3 different writing styles."""
 
 import logging
-from agents import function_tool, trace, gen_trace_id
+from agents import function_tool
 from schema.outreach import OutreachEmailDraft
 from utils.model_fallback import run_agent_with_fallback
 
@@ -56,23 +56,17 @@ Create a formal business email that establishes credibility and demonstrates cle
 
 Do not use any placeholder text like [Your Name] or [Company]. Write complete, ready-to-send content."""
     
-    trace_id = gen_trace_id()
     try:
-        with trace(
-            workflow_name="professional_email_generation",
-            trace_id=trace_id,
-            metadata={"target": name, "value_prop": value_proposition}
-        ):
-            result, provider = await run_agent_with_fallback(
-                name="ProfessionalWriter",
-                instructions=PROFESSIONAL_INSTRUCTIONS,
-                prompt=prompt,
-                output_type=OutreachEmailDraft,
-                temperature=0.3,
-                max_tokens=1000
-            )
-            logger.info(f"Professional email generated using {provider}")
-            return result
+        result, provider = await run_agent_with_fallback(
+            name="ProfessionalWriter",
+            instructions=PROFESSIONAL_INSTRUCTIONS,
+            prompt=prompt,
+            output_type=OutreachEmailDraft,
+            temperature=0.3,
+            max_tokens=1000
+        )
+        logger.info(f"Professional email generated using {provider}")
+        return result
     except Exception as e:
         logger.error(f"Professional email generation failed: {e}")
         return OutreachEmailDraft(
@@ -99,23 +93,17 @@ Create a warm, conversational email that tells a relevant business story or scen
 
 Do not use any placeholder text like [Your Name] or [Company]. Write complete, ready-to-send content with authentic storytelling."""
     
-    trace_id = gen_trace_id()
     try:
-        with trace(
-            workflow_name="engaging_email_generation",
-            trace_id=trace_id,
-            metadata={"target": name, "value_prop": value_proposition}
-        ):
-            result, provider = await run_agent_with_fallback(
-                name="EngagingWriter",
-                instructions=ENGAGING_INSTRUCTIONS,
-                prompt=prompt,
-                output_type=OutreachEmailDraft,
-                temperature=0.7,
-                max_tokens=1000
-            )
-            logger.info(f"Engaging email generated using {provider}")
-            return result
+        result, provider = await run_agent_with_fallback(
+            name="EngagingWriter",
+            instructions=ENGAGING_INSTRUCTIONS,
+            prompt=prompt,
+            output_type=OutreachEmailDraft,
+            temperature=0.7,
+            max_tokens=1000
+        )
+        logger.info(f"Engaging email generated using {provider}")
+        return result
     except Exception as e:
         logger.error(f"Engaging email generation failed: {e}")
         return OutreachEmailDraft(
@@ -142,23 +130,17 @@ Create a short, to-the-point email (maximum 4-5 sentences) that gets straight to
 
 Do not use any placeholder text like [Your Name] or [Company]. Write complete, ready-to-send content that's direct and actionable."""
     
-    trace_id = gen_trace_id()
     try:
-        with trace(
-            workflow_name="concise_email_generation",
-            trace_id=trace_id,
-            metadata={"target": name, "value_prop": value_proposition}
-        ):
-            result, provider = await run_agent_with_fallback(
-                name="ConciseWriter",
-                instructions=CONCISE_INSTRUCTIONS,
-                prompt=prompt,
-                output_type=OutreachEmailDraft,
-                temperature=0.5,
-                max_tokens=800
-            )
-            logger.info(f"Concise email generated using {provider}")
-            return result
+        result, provider = await run_agent_with_fallback(
+            name="ConciseWriter",
+            instructions=CONCISE_INSTRUCTIONS,
+            prompt=prompt,
+            output_type=OutreachEmailDraft,
+            temperature=0.5,
+            max_tokens=800
+        )
+        logger.info(f"Concise email generated using {provider}")
+        return result
     except Exception as e:
         logger.error(f"Concise email generation failed: {e}")
         return OutreachEmailDraft(
