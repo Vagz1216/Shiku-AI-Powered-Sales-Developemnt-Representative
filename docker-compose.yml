@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  squad3:
+    build: .
+    ports:
+      - "7860:7860"
+    env_file:
+      - .env
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - AGENTMAIL_API_KEY=${AGENTMAIL_API_KEY}
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

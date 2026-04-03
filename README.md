@@ -48,6 +48,33 @@ After a successful send: update lead touch fields, increment campaign_leads.emai
 
 Local schema reference: db/schema.sql and packages/db/models.py. Reconcile with the official database PR when it lands.
 
+## Docker Deployment
+
+### Quick Start
+
+Build and run with Docker:
+```bash
+docker build -t squad3 .
+docker run -p 7860:7860 -e OPENAI_API_KEY=your_key squad3
+```
+
+Or use Docker Compose:
+```bash
+# Set environment variables in .env file first
+docker-compose up --build
+```
+
+### Hugging Face Spaces
+
+Simply push your code - the Dockerfile handles deployment automatically.
+
+Set these environment variables in your Space settings:
+- `OPENAI_API_KEY`
+- `AGENTMAIL_API_KEY`
+- `AGENTMAIL_INBOX_ID`
+- `COMPOSIO_API_KEY`
+- `COMPOSIO_USER_ID`
+
 Safe review (no real sends, still uses OpenAI):
 
     uv run python scripts/seed_contacts.py
