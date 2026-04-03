@@ -80,7 +80,7 @@ class SeniorMarketingAgent:
         
         try:
             with trace(
-                workflow_name="outreach_campaign_execution_pipeline",
+                workflow_name="Outreach Campaign Execution Pipeline",
                 trace_id=trace_id,
                 metadata={"campaign": campaign_name or "random_active"}
             ):

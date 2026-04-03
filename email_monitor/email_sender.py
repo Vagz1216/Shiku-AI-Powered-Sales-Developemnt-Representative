@@ -69,6 +69,7 @@ Execute tools in sequence for meeting scenarios.
     async def execute_action(self, approved_response: str, email_data: Dict[str, Any]) -> EmailActionResult:
         """Execute the appropriate action (send email, create meeting, etc.) based on the approved response."""
         sender_email = email_data.get('from_', [''])[0]
+        message_id = email_data.get('id')  # Original message ID for proper replies
         thread_id = email_data.get('thread_id')
         subject = email_data.get('subject', '')
         
@@ -82,12 +83,14 @@ APPROVED RESPONSE: {approved_response}
 
 EMAIL DETAILS:
 - To: {sender_email}
+- Reply to Message ID: {message_id}
 - Subject: {subject}  
 - Thread: {thread_id}
 - Intent: {intent_data.get('intent', 'unknown')} ({intent_data.get('confidence', 0.0)})
 - Content: {email_content}
 - History: {conversation_history or 'None'}
 
+IMPORTANT: Use send_reply_email with message_id={message_id} for proper threading.
 Execute appropriate tools based on response content.
 """
         

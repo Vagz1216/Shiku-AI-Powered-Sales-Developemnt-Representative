@@ -118,11 +118,11 @@ class EmailMonitorSystem:
         return self._agentmail_client
     
     async def fetch_conversation_history(self, thread_id: str, limit: int = 10) -> str:
-        """Fetch previous messages from email thread for context.
+        """Fetch thread messages using proper AgentMail API.
         
         Args:
             thread_id: Email thread identifier
-            limit: Maximum number of previous messages to fetch
+            limit: Maximum number of messages to include (for context length control)
             
         Returns:
             Formatted conversation history string
@@ -131,27 +131,27 @@ class EmailMonitorSystem:
             return "No thread ID available."
             
         try:
-            # Get thread messages from AgentMail
-            response = self.agentmail_client.inboxes.threads.list_messages(
-                inbox_id=settings.agentmail_inbox_id,
-                thread_id=thread_id,
-                limit=limit,
-                order="asc"  # Oldest first for chronological order
-            )
+            # Get full thread with all messages using efficient API
+            thread = self.agentmail_client.threads.get(thread_id=thread_id)
             
-            if not response.messages:
-                return "No previous messages in thread."
+            if not thread.messages:
+                return "No messages found in thread."
+            
+            # Sort by creation time and limit for context control
+            messages = sorted(thread.messages, key=lambda x: getattr(x, 'created_at', 0))
+            messages = messages[:limit]
             
             # Format conversation history
             history_parts = []
-            for msg in response.messages:
+            for msg in messages:
                 sender = msg.from_[0] if msg.from_ else "Unknown"
                 timestamp = msg.created_at.strftime("%Y-%m-%d %H:%M") if msg.created_at else "Unknown time"
-                content = msg.text or msg.preview or "[No content]"
+                # Use extracted_text for clean content without quoted history
+                content = msg.extracted_text or msg.text or msg.preview or "[No content]"
                 
-                # Truncate very long messages
-                if len(content) > 500:
-                    content = content[:500] + "... [truncated]"
+                # Truncate very long messages for context efficiency
+                if len(content) > 300:
+                    content = content[:300] + "... [truncated]"
                 
                 history_parts.append(
                     f"[{timestamp}] {sender}:\n{content}\n"
@@ -160,7 +160,7 @@ class EmailMonitorSystem:
             return "\n---\n".join(history_parts)
             
         except Exception as e:
-            logger.warning(f"Failed to fetch conversation history for thread {thread_id}: {e}")
+            logger.warning(f"Failed to fetch thread {thread_id}: {e}")
             return f"Unable to fetch conversation history: {str(e)}"
     
     async def process_incoming_email(self, email_data: Dict[str, Any]) -> EmailActionResult:
@@ -212,22 +212,22 @@ class EmailMonitorSystem:
                     )
                     
                     # Handle skipped responses
-                    if response_result["action"] == "skipped":
+                    if response_result.action == "skipped":
                         return EmailActionResult(
                             action_taken="skipped",
                             success=True,
-                            error=response_result.get("reason")
+                            error=response_result.reason
                         )
                     
-                    if response_result["action"] != "generated":
+                    if response_result.action != "generated":
                         return EmailActionResult(
                             action_taken="error",
                             success=False,
-                            error=response_result.get("reason", "Failed to generate response")
+                            error=response_result.reason or "Failed to generate response"
                         )
                     
                     # Step 4: Evaluate response
-                    response_text = response_result["response_text"]
+                    response_text = response_result.response_text
                     evaluation_context = {**email_data, "intent": intent.intent}
                     
                     evaluation = await self.response_evaluator.evaluate_response(
