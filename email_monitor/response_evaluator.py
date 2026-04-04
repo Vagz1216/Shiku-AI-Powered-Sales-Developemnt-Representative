@@ -46,10 +46,11 @@ Return a simple pass/fail decision with brief reasoning.
         """Evaluate an email response - simple pass/fail decision."""
         # Extract email information from clean metadata
         sender_email = email_context.get('sender_email', '')
+        sender_name = email_context.get('sender_name', 'Unknown')
         subject = email_context.get('subject', '')
         intent = email_context.get('intent', 'unknown')
         
-        context = f"Response: {response_text}\nRecipient: {sender_email}\nSubject: {subject}\nIntent: {intent}"        
+        context = f"Response: {response_text}\\nRecipient: {sender_name} ({sender_email})\\nSubject: {subject}\\nIntent: {intent}"
         try:
             result = await Runner.run(self.agent, context)
             evaluation = result.final_output

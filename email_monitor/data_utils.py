@@ -7,6 +7,37 @@ from typing import Dict, Any, Optional
 logger = logging.getLogger(__name__)
 
 
+def extract_sender_name(email_data: Dict[str, Any]) -> str:
+    """Extract sender name from webhook payload, fallback to email if no name."""
+    
+    # Get email from from_ or from field (AgentMail uses both)
+    email_string = email_data.get('from_') or email_data.get('from', '')
+    
+    # Handle list format (sometimes it's wrapped in a list)
+    if isinstance(email_string, list) and email_string:
+        email_string = email_string[0]
+    
+    if not isinstance(email_string, str):
+        email_string = str(email_string)
+    
+    # Parse "Name <email>" format if present
+    if '<' in email_string and '>' in email_string:
+        name_match = re.search(r'^([^<]+)\s*<[^>]+@[^>]+>', email_string)
+        if name_match:
+            name = name_match.group(1).strip()
+            # Clean up common email artifacts
+            name = re.sub(r'["\'\\\/]', '', name)  # Remove quotes and slashes
+            if name and name not in ['', 'unknown', 'null']:
+                logger.debug(f"Extracted sender name: {name}")
+                return name
+    
+    # Fallback to email part before @
+    email = extract_sender_email(email_data)
+    fallback_name = email.split('@')[0] if '@' in email else email
+    logger.debug(f"Using fallback name from email: {fallback_name}")
+    return fallback_name
+
+
 def extract_sender_email(email_data: Dict[str, Any]) -> str:
     """Extract sender email from webhook payload - simplified for AgentMail format."""
     
@@ -78,6 +109,7 @@ def get_email_metadata(email_data: Dict[str, Any]) -> Dict[str, Any]:
     """Extract all key metadata from email payload in one call."""
     return {
         'sender_email': extract_sender_email(email_data),
+        'sender_name': extract_sender_name(email_data),
         'message_id': extract_message_id(email_data),
         'content': extract_email_content(email_data),
         'thread_id': extract_thread_id(email_data),

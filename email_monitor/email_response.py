@@ -54,10 +54,11 @@ Euclid Squad3 Solutions
         """Generate appropriate response based on intent."""
         # Extract email information from clean metadata
         sender_email = email_data.get('sender_email', '')
+        sender_name = email_data.get('sender_name', 'Unknown')
         subject = email_data.get('subject', '')
         content = email_data.get('content', '')
         
-        context = f"From: {sender_email}\nSubject: {subject}\nContent: {content}\nINTENT: {intent.intent} (confidence: {intent.confidence})\nHistory: {conversation_history or 'None'}"
+        context = f"From: {sender_name} ({sender_email})\\nSubject: {subject}\\nContent: {content}\\nINTENT: {intent.intent} (confidence: {intent.confidence})\\nHistory: {conversation_history or 'None'}"
         
         try:
             result = await Runner.run(self.agent, context)
