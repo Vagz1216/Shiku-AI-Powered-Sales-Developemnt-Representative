@@ -1,6 +1,7 @@
 """Email monitoring system orchestrator."""
 
 import logging
+import re
 from typing import Dict, Any
 from agentmail import AgentMail
 
@@ -37,13 +38,13 @@ class EmailMonitorSystem:
             self._agentmail_client = AgentMail(api_key=settings.agentmail_api_key)
         return self._agentmail_client
     
-    async def fetch_conversation_history(self, thread_id: str, current_message_id: str = None, limit: int = 10) -> str:
+    async def fetch_conversation_history(self, thread_id: str, current_message_id: str = None, limit: int = 20) -> str:
         """Fetch thread messages using proper AgentMail API with improved message handling.
         
         Args:
             thread_id: Email thread identifier
             current_message_id: ID of current message to exclude from history
-            limit: Maximum number of messages to include (for context length control)
+            limit: Maximum number of messages to include (increased from 10 to 20)
             
         Returns:
             Formatted conversation history string (excluding current message)
@@ -70,17 +71,19 @@ class EmailMonitorSystem:
             # Format conversation history with improved message handling
             history_parts = []
             for msg in messages:
-                # Handle sender extraction - use first letter for display name brevity
+                # Handle sender extraction - use full name, not just first letter
                 sender_raw = msg.from_[0] if msg.from_ else "Unknown"
                 if isinstance(sender_raw, str) and '<' in sender_raw:
-                    # Extract name from "Name <email>" format
-                    sender = sender_raw.split('<')[0].strip()
-                    if sender:
-                        sender = sender[0]  # First letter only for brevity
+                    # Extract full name from "Name <email>" format
+                    name_match = re.search(r'^([^<]+)\s*<', sender_raw)
+                    if name_match:
+                        sender = name_match.group(1).strip()
+                        # Clean up quotes and artifacts
+                        sender = re.sub(r'["\'\\\/]', '', sender)
                     else:
-                        sender = sender_raw.split('@')[0] if '@' in sender_raw else "U"
+                        sender = sender_raw.split('@')[0] if '@' in sender_raw else "Unknown"
                 else:
-                    sender = str(sender_raw)[0] if sender_raw else "U"
+                    sender = str(sender_raw) if sender_raw else "Unknown"
                 
                 # Format timestamp  
                 timestamp = msg.created_at.strftime("%Y-%m-%d %H:%M") if msg.created_at else "Unknown time"
@@ -88,9 +91,19 @@ class EmailMonitorSystem:
                 # Use extracted_text for clean content without quoted history, fallback to text/preview
                 content = msg.extracted_text or msg.text or msg.preview or "[No content]"
                 
-                # Truncate very long messages for context efficiency
-                if len(content) > 300:
-                    content = content[:300] + "... [truncated]"
+                # Increase content limit and provide smarter truncation
+                if len(content) > 1000:  # Increased from 300 to 1000
+                    # Try to truncate at sentence boundary
+                    truncated = content[:1000]
+                    last_sentence = max(
+                        truncated.rfind('.'),
+                        truncated.rfind('!'), 
+                        truncated.rfind('?')
+                    )
+                    if last_sentence > 1000: 
+                        content = content[:last_sentence + 1] + " [truncated]"
+                    else:
+                        content = content[:1000] + "... [truncated]"
                 
                 history_parts.append(
                     f"[{timestamp}] {sender}:\n{content}\n"

@@ -79,12 +79,13 @@ Never create meetings unless the intent is explicitly "meeting_request".
         """Execute the appropriate action (send email, create meeting, etc.) based on the approved response."""
         # Use clean metadata fields
         sender_email = email_data.get('sender_email', '')
+        sender_name = email_data.get('sender_name', 'Unknown')
         message_id = email_data.get('message_id')  # Use extracted message_id
         thread_id = email_data.get('thread_id')
         subject = email_data.get('subject', '')
         
         # Debug logging for message_id propagation  
-        logger.info(f"EmailSenderAgent - sender: {sender_email}, message_id: {message_id}, thread_id: {thread_id}")
+        logger.info(f"EmailSenderAgent - sender: {sender_name} ({sender_email}), message_id: {message_id}, thread_id: {thread_id}")
         
         # Build context for the agent 
         intent_data = email_data.get('intent', {})
@@ -93,11 +94,11 @@ Never create meetings unless the intent is explicitly "meeting_request".
         
         context = f"""RESPONSE: {approved_response}
 
-EMAIL: From {sender_email} | Subject: {subject} | MSG_ID: {message_id} | Thread: {thread_id}
+EMAIL: From {sender_email} ({sender_name}) | Subject: {subject} | MSG_ID: {message_id} | Thread: {thread_id}
 INTENT: {intent_data.get('intent', 'unknown')} (confidence: {intent_data.get('confidence', 0.0)})
 
-CONTENT: {email_content[:200]}{'...' if len(email_content) > 200 else ''}
-HISTORY: {conversation_history[:150] if conversation_history else 'None'}{'...' if conversation_history and len(conversation_history) > 150 else ''}
+CONTENT: {email_content}
+HISTORY: {conversation_history if conversation_history else 'None'}
 
 ACTIONS:
 1. Send reply using message_id={message_id}
