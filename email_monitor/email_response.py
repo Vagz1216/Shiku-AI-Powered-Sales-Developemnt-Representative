@@ -52,9 +52,10 @@ Euclid Squad3 Solutions
     
     async def generate_response(self, email_data: Dict[str, Any], intent: EmailIntent, conversation_history: str = "") -> EmailResponse:
         """Generate appropriate response based on intent."""
-        sender_email = email_data.get('from_', [''])[0]
+        # Extract email information from clean metadata
+        sender_email = email_data.get('sender_email', '')
         subject = email_data.get('subject', '')
-        content = email_data.get('text', '') or email_data.get('preview', '')
+        content = email_data.get('content', '')
         
         context = f"From: {sender_email}\nSubject: {subject}\nContent: {content}\nINTENT: {intent.intent} (confidence: {intent.confidence})\nHistory: {conversation_history or 'None'}"
         

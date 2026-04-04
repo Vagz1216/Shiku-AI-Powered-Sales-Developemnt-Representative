@@ -16,6 +16,7 @@ from config.logging import setup_logging
 from config import settings
 from schema import WebhookEvent
 from email_monitor.monitor import email_monitor
+from email_monitor.webhook_utils import should_process_webhook, DEFAULT_LOOP_PREVENTION
 from outreach.gradio_interface import create_outreach_interface
 
 # Setup logging
@@ -92,33 +93,38 @@ async def execute_marketing_campaign(campaign_name: Optional[str] = None) -> dic
 # Email monitoring endpoints  
 @app.post("/webhook")
 async def handle_webhook(request: Request) -> Dict[str, Any]:
-    """Handle AgentMail webhook events with intent analysis."""
+    """Handle AgentMail webhook events (received messages only) with simplified loop prevention."""
     try:
         # Parse webhook payload
         payload = await request.json()
         event = WebhookEvent(**payload)
         
-        logger.info(f"Received {event.event_type} event: {event.event_id}")
+        logger.info(f"Received webhook: {event.event_id}")
         
-        # Only process message.received events
-        if event.event_type == "message.received":
-            # Skip our own messages
-            if _is_our_message(event.message):
-                logger.info("Skipping our own message")
-                return {"status": "skipped", "reason": "own_message"}
-            
-            # Process with intent-based system
-            result = await email_monitor.process_incoming_email(event.message)
-            
-            return {
-                "status": "processed", 
-                "action": result.action_taken,
-                "success": result.success,
-                "message_id": result.message_id,
-                "error": result.error
-            }
+        # Simplified processing decision (webhooks are received-only)
+        should_process, reason = await should_process_webhook(
+            event.event_id, 
+            event.event_type, 
+            event.message,
+            DEFAULT_LOOP_PREVENTION
+        )
         
-        return {"status": "ignored", "reason": f"event_type_{event.event_type}"}
+        if not should_process:
+            logger.info(f"Skipping webhook {event.event_id}: {reason}")
+            return {"status": "skipped", "reason": reason, "event_id": event.event_id}
+        
+        # Process received message
+        logger.info(f"Processing received message: {event.event_id}")
+        result = await email_monitor.process_incoming_email(event.message)
+        
+        return {
+            "status": "processed", 
+            "event_id": event.event_id,
+            "action": result.action_taken,
+            "success": result.success,
+            "message_id": result.message_id,
+            "error": result.error
+        }
         
     except Exception as e:
         logger.error(f"Webhook error: {e}")
@@ -132,7 +138,7 @@ async def email_monitor_health() -> Dict[str, str]:
 
 
 def _is_our_message(message_data: Dict[str, Any]) -> bool:
-    """Check if this message was sent by us."""
+    """Legacy function - replaced by enhanced webhook_utils.is_our_outgoing_message()"""
     labels = message_data.get('labels', [])
     return 'sent' in labels
 
