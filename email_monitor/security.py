@@ -50,7 +50,9 @@ def validate_email_security(content: str, sender_email: str, subject: str) -> Tu
         r'\$\([^)]*\)',     # jQuery-like selectors (potential XSS)
         r'document\.cookie', # Cookie access
         r'window\.location', # Location manipulation
-        r'\bexec\b|\bsystem\b|\bshell\b', # System commands
+        r'\bexec(?:\s*\(|\s+[a-zA-Z])', # Exec function calls or commands
+        r'\bshell(?:\s*\(|\s+[a-zA-Z])', # Shell function calls or commands  
+        r'system(?:\s*\(|\s+(?:call|exec|run|cmd))', # System function calls, not business "system"
     ]
     
     for pattern in suspicious_patterns:
