@@ -44,7 +44,8 @@ Return a simple pass/fail decision with brief reasoning.
     
     async def evaluate_response(self, response_text: str, email_context: Dict[str, Any]) -> ResponseEvaluation:
         """Evaluate an email response - simple pass/fail decision."""
-        sender_email = email_context.get('from_', [''])[0]
+        # Extract email information from clean metadata
+        sender_email = email_context.get('sender_email', '')
         subject = email_context.get('subject', '')
         intent = email_context.get('intent', 'unknown')
         
