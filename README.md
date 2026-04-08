@@ -1,113 +1,201 @@
 # Agent-Driven Outreach Platform
 
-Automated email outreach with AI response monitoring and lead qualification.
+AI-assisted sales outreach platform for running database-backed email campaigns, monitoring inbound replies, and optionally coordinating follow-up meetings.
 
-## Project structure
+## What This Repo Does Now
 
-Main areas:
+This repository currently centers on one deployable application in [main.py](https://github.com/Andela-AI-Engineering-Bootcamp/euclid_squad_3_sales_rep/blob/main/main.py):
 
-- apps/api: FastAPI entry for outreach (health, POST outreach/run).
-- packages/agents: Outbound generation, guardrails, batch pipeline.
-- packages/db: SQLAlchemy models, session, eligibility and persistence helpers.
-- packages/email: Calls shared AgentMail send in tools/.
-- packages/schema: Outreach Pydantic types (drafts, run records).
-- packages/shared: Re-exports config.settings for imports from packages.
-- config: One AppConfig from environment (keys, DATABASE_URL, monitor and outreach tuning).
-- db: schema.sql and seed.sql for local SQLite bootstrap.
-- email_monitor: Inbound webhook, intent, reply agents.
-- schema (repo root): Shared Pydantic for monitor and SendEmailResult.
-- tools: send_plain_email, send_agent_email tool, send_reply_email.
-- scripts: seed_contacts.py, run_outreach.py.
+- Outbound outreach campaigns driven by an OpenAI Agents workflow
+- A Gradio UI mounted inside FastAPI at `/outreach`
+- AgentMail webhook processing for inbound email replies
+- Intent classification, response drafting, evaluation, and reply sending
+- Optional meeting coordination through Composio + Google Calendar tools
+- SQLite bootstrap with sample campaigns, leads, and staff records
 
-Adopted from the merged monitor work: config, root schema, tools, email_monitor. Outbound-specific code lives under packages/ and apps/api.
+The previous README described an older `packages/`-based structure. That layout is not present in this checkout, so this document reflects the current code in the repo root.
 
-Outbound does not duplicate AgentMail retries: packages/email/outreach_send.py calls tools.send_plain_email.
+## Current Workflow
 
-## Quick start
+### Outbound campaign flow
 
-1. Copy .env.example to .env and set OPENAI_API_KEY and AGENTMAIL variables.
-2. Install: uv sync
-3. First database open applies db/schema.sql and db/seed.sql if empty. Optional: uv run python scripts/seed_contacts.py
-4. Outbound batch: uv run python scripts/run_outreach.py --limit 5
-5. API (optional): from repo root, uv run uvicorn apps.api.main:app --reload then POST /outreach/run?limit=5
-6. Inbound monitor: uv run run-email-monitor (see email_monitor/server.py; webhook helper: uv run setup-webhook if you use it).
+1. Load an active campaign from the database.
+2. Select an eligible lead.
+3. Generate three email variants.
+4. Let the agent choose the strongest draft.
+5. Send one outbound email through AgentMail.
 
-## Outbound review checklist
+Primary files:
 
-Use this to sanity-check the outbound path before demo or PR.
+- [outreach/marketing_agent.py](https://github.com/Andela-AI-Engineering-Bootcamp/euclid_squad_3_sales_rep/blob/main/outreach/marketing_agent.py)
+- [outreach/gradio_interface.py](https://github.com/Andela-AI-Engineering-Bootcamp/euclid_squad_3_sales_rep/blob/main/outreach/gradio_interface.py)
+- [tools/campaign_tools.py](https://github.com/Andela-AI-Engineering-Bootcamp/euclid_squad_3_sales_rep/blob/main/tools/campaign_tools.py)
+- [tools/lead_tools.py](https://github.com/Andela-AI-Engineering-Bootcamp/euclid_squad_3_sales_rep/blob/main/tools/lead_tools.py)
+- [tools/send_email.py](https://github.com/Andela-AI-Engineering-Bootcamp/euclid_squad_3_sales_rep/blob/main/tools/send_email.py)
 
-Eligible leads: not opted out, active campaign, campaign_leads.emails_sent below cap, lead status not OPTED_OUT or COLD. Implemented in packages/db/outreach_queries.py (fetch_eligible_targets).
+### Inbound monitoring flow
 
-Per lead: load campaign name, value proposition, and CTA from the database; generate subject and body JSON via OpenAI Agents SDK (outreach_generator.py, outreach_pipeline.py).
+1. AgentMail sends a webhook to `POST /webhook`.
+2. The app validates the event and applies loop prevention.
+3. The monitor extracts intent from the inbound message.
+4. A response is generated and evaluated.
+5. The system sends a reply and, for meeting requests, can create a calendar event and notify staff.
 
-Guardrails: tone, length, forbidden phrases, opt-out footer in packages/agents/guardrails.py.
+Primary files:
 
-Send: tools/send_plain_email, wrapped by packages/email/outreach_send.py.
+- [email_monitor/monitor.py](https://github.com/Andela-AI-Engineering-Bootcamp/euclid_squad_3_sales_rep/blob/main/email_monitor/monitor.py)
+- [email_monitor/email_sender.py](https://github.com/Andela-AI-Engineering-Bootcamp/euclid_squad_3_sales_rep/blob/main/email_monitor/email_sender.py)
+- [email_monitor/webhook_utils.py](https://github.com/Andela-AI-Engineering-Bootcamp/euclid_squad_3_sales_rep/blob/main/email_monitor/webhook_utils.py)
+- [tools/google_calendar.py](https://github.com/Andela-AI-Engineering-Bootcamp/euclid_squad_3_sales_rep/blob/main/tools/google_calendar.py)
+- [tools/notify_staff.py](https://github.com/Andela-AI-Engineering-Bootcamp/euclid_squad_3_sales_rep/blob/main/tools/notify_staff.py)
 
-After a successful send: update lead touch fields, increment campaign_leads.emails_sent, insert outbound email_messages, append events (persist_outbound_success).
+## Repo Layout
 
-Local schema reference: db/schema.sql and packages/db/models.py. Reconcile with the official database PR when it lands.
+- [main.py](https://github.com/Andela-AI-Engineering-Bootcamp/euclid_squad_3_sales_rep/blob/main/main.py): FastAPI app and Gradio mount
+- [config/](https://github.com/Andela-AI-Engineering-Bootcamp/euclid_squad_3_sales_rep/tree/main/config): environment settings and logging
+- [outreach/](https://github.com/Andela-AI-Engineering-Bootcamp/euclid_squad_3_sales_rep/tree/main/outreach): campaign agent and UI
+- [email_monitor/](https://github.com/Andela-AI-Engineering-Bootcamp/euclid_squad_3_sales_rep/tree/main/email_monitor): inbound monitoring pipeline
+- [tools/](https://github.com/Andela-AI-Engineering-Bootcamp/euclid_squad_3_sales_rep/tree/main/tools): agent-callable tools for campaigns, email, staff, and meetings
+- [services/](https://github.com/Andela-AI-Engineering-Bootcamp/euclid_squad_3_sales_rep/tree/main/services): database-oriented service layer
+- [schema/](https://github.com/Andela-AI-Engineering-Bootcamp/euclid_squad_3_sales_rep/tree/main/schema): shared Pydantic models
+- [db/](https://github.com/Andela-AI-Engineering-Bootcamp/euclid_squad_3_sales_rep/tree/main/db): SQLite schema and seed data
+- [utils/db_connection.py](https://github.com/Andela-AI-Engineering-Bootcamp/euclid_squad_3_sales_rep/blob/main/utils/db_connection.py): auto-creates schema and seeds sample data
 
-## Docker Deployment
+## Requirements
 
-### Quick Start
+- Python 3.12+
+- `uv`
+- OpenAI API key
+- AgentMail inbox and API key for real email delivery
+- Optional Composio credentials if you want automatic Google Calendar meeting creation
 
-Build and run with Docker:
+## Environment Setup
+
+1. Copy the sample env file:
+
 ```bash
-docker build -t squad3 .
-docker run -p 7860:7860 -e OPENAI_API_KEY=your_key squad3
+cp .env.example .env
 ```
 
-Or use Docker Compose:
-```bash
-# Set environment variables in .env file first
-docker-compose up --build
-```
+2. Fill in the required values in `.env`:
 
-### Hugging Face Spaces
-
-Simply push your code - the Dockerfile handles deployment automatically.
-
-Set these environment variables in your Space settings:
 - `OPENAI_API_KEY`
 - `AGENTMAIL_API_KEY`
 - `AGENTMAIL_INBOX_ID`
+
+3. Optional values:
+
+- `DATABASE_URL`
+- `OPENROUTER_API_KEY`
+- `CEREBRAS_API_KEY`
+- `GROQ_API_KEY`
 - `COMPOSIO_API_KEY`
 - `COMPOSIO_USER_ID`
 
-Safe review (no real sends, still uses OpenAI):
+Important:
 
-    uv run python scripts/seed_contacts.py
-    uv run python scripts/run_outreach.py --limit 1 --dry-run
+- `DEBUG` must be a real boolean such as `true` or `false`
+- the default database is `sqlite:///./db/sdr.sqlite3`
+- logs are written to `logs/squad3.log`
 
-Dry-run does not call AgentMail or write send-related database updates. For full body in JSON locally, add --full-body-preview (avoid pasting into public channels).
+Reference files:
 
-Eligible leads need a row in campaign_leads for an active campaign (see db/seed.sql). scripts/seed_contacts.py can add more linked leads.
+- [.env.example](https://github.com/Andela-AI-Engineering-Bootcamp/euclid_squad_3_sales_rep/blob/main/.env.example)
+- [config/settings.py](https://github.com/Andela-AI-Engineering-Bootcamp/euclid_squad_3_sales_rep/blob/main/config/settings.py)
 
-Full send (real mail):
+## Local Development
 
-    uv run python scripts/run_outreach.py --limit 1
+Install dependencies:
 
-Use test inboxes and people who agreed to receive mail.
+```bash
+uv sync
+```
 
-Guardrail unit tests only:
+Start the app in development mode:
 
-    uv sync --extra dev
-    uv run pytest tests/test_guardrails.py -q
+```bash
+uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
 
-## Core features
+Alternative startup script:
 
-- Email outreach agent for personalized campaigns.
-- Response monitoring and intent handling.
-- Lead qualification and notifications (as the platform grows).
-- Google Meet style scheduling (planned / integrations).
+```bash
+./start.sh
+```
 
-## Architecture
+Once running:
 
-Config: single AppConfig in config/settings.py; .env and .env.example drive behavior. Outreach reads the same settings via packages.shared.settings.
+- API root: `http://localhost:8000/`
+- Health check: `http://localhost:8000/health`
+- Outreach UI: `http://localhost:8000/outreach`
 
-API: apps/api for outbound trigger; inbound uses email_monitor and run-email-monitor.
+If you use `./start.sh` or Docker, the default port is `7860`.
 
-Packages hold database access and outbound orchestration; AgentMail send stays in tools/.
+## Database Bootstrap
 
-Schemas: root schema/ for monitor and tool results; packages/schema/ for outreach-only payloads.
+The SQLite database is created automatically on first access.
+
+- Schema file: [db/schema.sql](https://github.com/Andela-AI-Engineering-Bootcamp/euclid_squad_3_sales_rep/blob/main/db/schema.sql)
+- Seed data: [db/seed.sql](https://github.com/Andela-AI-Engineering-Bootcamp/euclid_squad_3_sales_rep/blob/main/db/seed.sql)
+
+The seed includes:
+
+- active and paused campaigns
+- sample leads
+- campaign-to-lead links
+- staff records for meeting routing
+
+You can verify campaign loading from the app because the Gradio dropdown is populated from the database.
+
+## API Endpoints
+
+- `GET /`: service overview
+- `GET /health`: global health check
+- `GET /email-monitor/health`: monitor health check
+- `POST /outreach/campaign`: run a campaign, optional `campaign_name` query param
+- `POST /webhook`: AgentMail inbound email webhook
+- `GET /outreach`: Gradio campaign UI
+
+Example campaign trigger:
+
+```bash
+curl -X POST "http://localhost:8000/outreach/campaign?campaign_name=Outbound%20Outreach%20-%20Q2"
+```
+
+## Docker
+
+Build and run:
+
+```bash
+docker build -t squad3 .
+docker run --rm -p 7860:7860 --env-file .env squad3
+```
+
+Or with Compose:
+
+```bash
+docker-compose up --build
+```
+
+The container image is set up for port `7860`, which also fits Hugging Face Spaces style deployment.
+
+## Operational Notes
+
+- Outbound sending uses AgentMail through [tools/send_email.py](https://github.com/Andela-AI-Engineering-Bootcamp/euclid_squad_3_sales_rep/blob/main/tools/send_email.py).
+- Inbound replies depend on AgentMail webhook delivery to `POST /webhook`.
+- Meeting creation is only attempted for `meeting_request` intents.
+- Google Calendar creation depends on Composio being configured correctly.
+- Logging is configured once at startup and rotates to `logs/squad3.log`.
+
+## Known Caveats
+
+- Some scripts and tests still reference an older `packages.*` module layout that is not present in this checkout.
+- In particular, [scripts/run_outreach.py](https://github.com/Andela-AI-Engineering-Bootcamp/euclid_squad_3_sales_rep/blob/main/scripts/run_outreach.py), [scripts/seed_contacts.py](https://github.com/Andela-AI-Engineering-Bootcamp/euclid_squad_3_sales_rep/blob/main/scripts/seed_contacts.py), and [tests/test_guardrails.py](https://github.com/Andela-AI-Engineering-Bootcamp/euclid_squad_3_sales_rep/blob/main/tests/test_guardrails.py) currently point at missing modules.
+- Because of that, the most reliable paths today are the FastAPI app, the mounted Gradio UI, and the webhook monitor flow described above.
+
+## Recommended Next Cleanup
+
+- restore or remove the legacy `packages/`-based scripts and tests
+- add a lightweight smoke test for `main.py`
+- document the expected AgentMail webhook payload and local tunneling workflow
+- add an end-to-end demo script for running one campaign against seed data
