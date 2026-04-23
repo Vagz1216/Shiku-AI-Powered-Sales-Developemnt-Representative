@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 class EmailIntent(BaseModel):
     """Structured intent classification result."""
+    rationale: str = Field(description="Chain of thought explaining the reasoning behind the classification.")
     intent: str = Field(description="Classified intent of the email e.g meeting_request, question, opt_out, interest, neutral, bounce, spam")
     confidence: float = Field(description="Confidence score of the classification (0.0 - 1.0)")
 
@@ -33,12 +34,14 @@ class MeetingResult(BaseModel):
 
 class ResponseEvaluation(BaseModel):
     """Structured response evaluation result."""
+    rationale: str = Field(description="Chain of thought explaining the reasoning behind the evaluation.")
     approved: bool = Field(description="Whether the response is approved for sending")
     reason: str = Field(description="Brief explanation of the approval or rejection decision")
 
 
 class MeetingDetails(BaseModel):
     """Structured meeting details for calendar event creation."""
+    rationale: str = Field(description="Chain of thought explaining the reasoning behind the selected meeting details.")
     subject: str = Field(description="Professional meeting subject line")
     start_time: str = Field(description="Meeting start time in YYYY-MM-DD HH:MM format")
     duration_minutes: int = Field(description="Duration of the meeting in minutes")
@@ -48,6 +51,7 @@ class MeetingDetails(BaseModel):
 
 class EmailResponse(BaseModel):
     """Structured email response output."""
+    rationale: str = Field(description="Chain of thought explaining the reasoning behind the generated response.")
     response_text: str = Field(description="The generated email response text")
     action: str = Field(description="Action taken: generated, skipped, or error")
     reason: str | None = Field(None, description="Reason for skipping or error if applicable")

@@ -33,11 +33,11 @@ Evaluate the response for:
 - No inappropriate, offensive, or unprofessional content
 - Clear and helpful response to the inquiry
 
-Return a simple pass/fail decision with brief reasoning.
+Provide a chain of thought rationale explaining your evaluation before returning a simple pass/fail decision.
 """,
             model_settings=ModelSettings(
                 temperature=0.2,  # Low temperature for consistent evaluation  
-                max_tokens=200
+                max_tokens=300
             ),
             output_type=ResponseEvaluation
         )
@@ -58,4 +58,8 @@ Return a simple pass/fail decision with brief reasoning.
             return evaluation
         except Exception as e:
             logger.error(f"Evaluation failed: {e}")
-            return ResponseEvaluation(approved=False, reason=f"Evaluation error: {str(e)}")
+            return ResponseEvaluation(
+                rationale="Fallback rationale due to evaluation error.",
+                approved=False, 
+                reason=f"Evaluation error: {str(e)}"
+            )

@@ -18,13 +18,14 @@ if settings.openai_api_key:
 
 
 @function_tool
-async def generate_meeting_details(email_context: str, sender_email: str) -> MeetingDetails:
+async def generate_meeting_details(email_context: str, sender_email: str, staff_availability: str = "", staff_timezone: str = "UTC") -> MeetingDetails:
     """Generate structured meeting details from email context.
     
     Args:
         email_context: The email content and conversation history
         sender_email: Email address of the sender
-        intent: The classified intent of the email
+        staff_availability: Staff member's availability in JSON string format
+        staff_timezone: Staff member's timezone
         
     Returns:
         MeetingDetails with subject, start_time, duration_minutes, description
@@ -37,18 +38,22 @@ async def generate_meeting_details(email_context: str, sender_email: str) -> Mee
 You are a meeting coordinator. Generate meeting details from email context.
 
 TODAY'S DATE: {datetime.now().strftime('%Y-%m-%d')}
+STAFF TIMEZONE: {staff_timezone}
+STAFF AVAILABILITY: {staff_availability}
 
 Generate professional meeting details:
 - Subject: Professional meeting title with company name
-- Start Time: Next 1-3 business days, 9AM-5PM UTC, YYYY-MM-DD HH:MM format
-- Duration: 15 min (quick questions), 30 min (general), 60 min (demos/detailed)  
+- Start Time: Mathematically align the proposed meeting time with the provided STAFF AVAILABILITY and STAFF TIMEZONE. You must ONLY pick a time slot that strictly fits within the staff's specified weekly hours. Format: YYYY-MM-DD HH:MM
+- Duration: 15 min (quick questions), 30 min (general), 60 min (demos/detailed). The duration must fit within the chosen availability block.
 - Description: Brief context from email conversation
 - Conversation Summary: Concise 2-3 sentence summary of email thread for staff context
+
+Provide a chain of thought rationale explaining how you aligned the proposed time with the staff's exact availability JSON and timezone before returning the final meeting details.
 """,
         model_settings=ModelSettings(
             model=settings.response_model,
             temperature=0.3,
-            max_tokens=300
+            max_tokens=400
         ),
         output_type=MeetingDetails
     )
@@ -68,6 +73,7 @@ Generate professional meeting details:
         while next_business_day.weekday() >= 5:
             next_business_day += timedelta(days=1)
         return MeetingDetails(
+            rationale="Fallback rationale due to meeting generation error.",
             subject=f"Business Discussion - {company_name}",
             start_time=next_business_day.replace(hour=14, minute=0).strftime('%Y-%m-%d %H:%M'),
             duration_minutes=30,

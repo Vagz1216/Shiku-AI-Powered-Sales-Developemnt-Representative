@@ -15,12 +15,12 @@ INSERT OR IGNORE INTO campaigns (id, name, value_proposition, cta, status) VALUE
 
 -- Sample leads
 INSERT OR IGNORE INTO leads (id, email, name, company, industry, pain_points, status, email_opt_out, touch_count) VALUES
-  (1, 'lawstands@gmail.com', 'Lawstands', 'LawStands Legal Tech', 'Legal Technology', 'Complex document management and compliance tracking', 'NEW', 0, 0),
-  (2, 'konnect1795@gmail.com', 'Konnect1795', 'Konnect Solutions', 'Software Development', 'Scaling development processes and team coordination', 'NEW', 0, 0),
+  (1, 'benjamin92clarke.com', 'Benjamin', 'Benjamin Legal Tech', 'Legal Technology', 'Complex document management and compliance tracking', 'NEW', 0, 0),
+  (2, 'darrielcollins4@gmail.com', 'Collins', 'Darriel Solutions', 'Software Development', 'Scaling development processes and team coordination', 'NEW', 0, 0),
   (3, 'martinkam1216@gmail.com', 'Martinkam1216', 'MarTechKam Inc', 'Marketing Technology', 'Customer attribution and campaign optimization', 'NEW', 0, 0),
-  (4, 'obogomaty@gmail.com', 'Obogomaty', 'Obogo Financial', 'Financial Technology', 'SOC2 compliance for enterprise sales acceleration', 'NEW', 0, 0),
-  (5, 'mayowasolomon@gmail.com', 'Mayowasolomon', 'Solomon Analytics', 'Data Analytics', 'Real-time dashboard automation and insights', 'NEW', 0, 0),
-  (6, 'nurudeenh@gmail.com', 'Nurudeenh', 'NurusTech Innovations', 'Technology Consulting', 'DevOps automation and deployment efficiency', 'NEW', 0, 0);
+  (4, 'martinezzval12@gmail.com', 'Darriel', 'Darriel Financial', 'Financial Technology', 'SOC2 compliance for enterprise sales acceleration', 'NEW', 0, 0),
+  (5, 'elvomanton@gmail.com', 'Elvomanton', 'Elvo Analytics', 'Data Analytics', 'Real-time dashboard automation and insights', 'NEW', 0, 0),
+  (6, 'gabriellegarcia9090@gmail.com', 'Gabriel', 'GabrielTech Innovations', 'Technology Consulting', 'DevOps automation and deployment efficiency', 'NEW', 0, 0);
 
 -- Link leads to campaign 1
 INSERT OR IGNORE INTO campaign_leads (campaign_id, lead_id, emails_sent) VALUES
@@ -33,9 +33,9 @@ INSERT OR IGNORE INTO campaign_leads (campaign_id, lead_id, emails_sent) VALUES
 
 -- Sample staff
 INSERT OR IGNORE INTO staff (id, name, email, timezone, availability) VALUES
-  (1, 'Nurudeen', 'nurudeenh@gmail.com', 'UTC', '{"monday": ["09:00-12:00","13:00-17:00"]}'),
-  (2, 'Mustapha', 'konnect1795@gmail.com', 'America/New_York', '{"tuesday": ["10:00-15:00"]}'),
-  (3, 'Mayowa', 'mayowasolomon@gmail.com', 'America/Los_Angeles', '{"wednesday": ["11:00-16:00"]}'),
-  (4, 'Obogomaty', 'obogomaty@gmail.com', 'America/Chicago', '{"thursday": ["09:00-12:00","13:00-17:00"]}'),
+  (1, 'Benjamin', 'benjamin92clarke.com', 'UTC', '{"monday": ["09:00-12:00","13:00-17:00"]}'),
+  (2, 'Collins', 'darrielcollins4@gmail.com', 'America/New_York', '{"tuesday": ["10:00-15:00"]}'),
+  (3, 'Darriel', 'martinezzval12@gmail.com', 'America/Los_Angeles', '{"wednesday": ["11:00-16:00"]}'),
+  (4, 'Elvomanton', 'elvomanton@gmail.com', 'America/Chicago', '{"thursday": ["09:00-12:00","13:00-17:00"]}'),
   (5, 'Martinkam', 'martinkam1216@gmail.com', 'America/Los_Angeles', '{"friday": ["10:00-15:00"]}'),
-  (6, 'Lawstands', 'lawstands@gmail.com', 'America/New_York', '{"monday": ["09:00-12:00","13:00-17:00"]}');
+  (6, 'Gabriel', 'gabriellegarcia9090@gmail.com', 'America/New_York', '{"monday": ["09:00-12:00","13:00-17:00"]}');

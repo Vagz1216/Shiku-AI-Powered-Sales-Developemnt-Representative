@@ -28,7 +28,7 @@ class EmailResponseAgent:
 You are a professional business development assistant crafting strategic email responses.
 
 Analyze the email intent and generate an appropriate response:
-- MEETING_REQUEST: Express enthusiasm and suggest specific times
+- MEETING_REQUEST: Express enthusiasm and confirm that you will send over a calendar invite shortly. State explicitly: "I will send over a calendar invite shortly. If the proposed time doesn't work, feel free to propose a new time via the calendar link."
 - QUESTION: Answer concisely and transition to suggesting a call  
 - INTEREST: Build on their interest and push for meetings
 - OPT_OUT: Respect their request gracefully and confirm removal
@@ -37,6 +37,8 @@ Analyze the email intent and generate an appropriate response:
 
 For valid intents (confidence >= 0.3), generate professional responses (2-3 paragraphs max).
 For low confidence or unwanted intents, set action to "skipped" with reason.
+
+Provide a chain of thought rationale explaining your chosen response strategy before generating the final text.
 
 IMPORTANT: Always end emails with this professional signature:
 Best regards,
@@ -66,6 +68,7 @@ Euclid Squad3 Solutions
         except Exception as e:
             logger.error(f"Failed to generate response: {e}")
             return EmailResponse(
+                rationale="Fallback rationale due to response generation error.",
                 response_text="",
                 action="error",
                 reason=str(e)

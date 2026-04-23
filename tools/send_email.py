@@ -9,24 +9,32 @@ from agents import function_tool
 
 from config import settings
 from schema import SendEmailResult
+import asyncio
+from utils.llama_guard import check_email_safety
 
 
-def send_plain_email(email: str, name: str, subject: str, body: str) -> SendEmailResult:
+async def send_plain_email(email: str, name: str, subject: str, body: str) -> SendEmailResult:
     """Send a plain-text email via AgentMail (no agent wrapper).
 
     Use this from the outreach pipeline.     The monitoring stack wraps the same logic as send_agent_email for OpenAI Agents.
     """
     if error := _validate_inputs(email, subject, body):
         return SendEmailResult(ok=False, error=error)
+        
+    # AI-based Validation Guardrail (Llama Guard logic)
+    safety_check = await check_email_safety(body, subject)
+    if not safety_check.is_safe:
+        return SendEmailResult(ok=False, error=f"Safety check failed: {safety_check.violation_reason}")
+        
     if error := _validate_config():
         return SendEmailResult(ok=False, error=error)
     return _send_with_retry(email, name, subject, body)
 
 
 @function_tool
-def send_agent_email(email: str, name: str, subject: str, body: str) -> SendEmailResult:
+async def send_agent_email(email: str, name: str, subject: str, body: str) -> SendEmailResult:
     """Send plain text email via AgentMail (agent-callable tool)."""
-    return send_plain_email(email, name, subject, body)
+    return await send_plain_email(email, name, subject, body)
 
 
 def _validate_inputs(email: str, subject: str, body: str) -> str | None:
@@ -39,6 +47,7 @@ def _validate_inputs(email: str, subject: str, body: str) -> str | None:
         return "Subject is required."
     if not body:
         return "Body is required."
+        
     return None
 
 

@@ -4,6 +4,7 @@ import logging
 import os
 from typing import Any, Dict, List, Optional, Type, Tuple
 from pydantic import BaseModel
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from agents import Agent, ModelSettings, Runner, set_default_openai_key
 from agents.models.openai_provider import OpenAIProvider
@@ -75,6 +76,52 @@ def get_available_providers() -> List[ModelProviderInfo]:
         
     return providers
 
+class ProviderExecutionError(Exception):
+    """Raised when an execution fails for a retriable reason."""
+    pass
+
+class ProviderFatalError(Exception):
+    """Raised when an execution fails for a non-retriable reason (e.g., Auth/Quota)."""
+    pass
+
+def is_fatal_error(e: Exception) -> bool:
+    """Determine if an exception should skip retries and fail immediately to the next provider."""
+    error_str = str(e).lower()
+    
+    # We do NOT want to retry on these errors, because retrying will just fail again and waste time.
+    fatal_keywords = [
+        "insufficient_quota", 
+        "invalid_api_key", 
+        "authentication_error", 
+        "unauthorized",
+        "billing_hard_limit",
+        "context_length_exceeded"
+    ]
+    
+    return any(keyword in error_str for keyword in fatal_keywords)
+
+
+# Apply Tenacity retry decorator. It will only retry on ProviderExecutionError.
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    retry=retry_if_exception_type(ProviderExecutionError),
+    reraise=True
+)
+async def _execute_with_retry(agent: Agent, prompt: str) -> Any:
+    """Executes the agent run, raising specific exceptions to control tenacity."""
+    try:
+        result = await Runner.run(agent, prompt)
+        return result
+    except Exception as e:
+        if is_fatal_error(e):
+            # Fatal error (like bad API key or out of credits). Do NOT retry.
+            raise ProviderFatalError(str(e))
+        else:
+            # Likely a rate limit (429) or transient 502/503. Tenacity WILL retry this.
+            raise ProviderExecutionError(str(e))
+
+
 async def run_agent_with_fallback(
     name: str,
     instructions: str,
@@ -133,13 +180,18 @@ async def run_agent_with_fallback(
                     tools=tools or []
                 )
             
-            result = await Runner.run(agent, prompt)
+            # Execute with Tenacity retries (only for transient errors)
+            result = await _execute_with_retry(agent, prompt)
             
             # Success - no need to validate tool calls as Runner.run handles execution
             logger.info(f"Agent {name} completed successfully with {p_info.name}")
             return result.final_output, p_info.name
+        except ProviderFatalError as e:
+            error_msg = f"{p_info.name} ({p_info.model}) failed FATALLY (skipping retries): {str(e)}"
+            logger.warning(error_msg)
+            errors.append(error_msg)
         except Exception as e:
-            error_msg = f"{p_info.name} ({p_info.model}) failed: {str(e)}"
+            error_msg = f"{p_info.name} ({p_info.model}) failed after retries: {str(e)}"
             logger.warning(error_msg)
             errors.append(error_msg)
 

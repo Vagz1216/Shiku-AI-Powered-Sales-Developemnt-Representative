@@ -36,7 +36,7 @@ Classify into one of these intents:
 - bounce: Automated bounce/out-of-office message
 - spam: Spam or irrelevant content
 
-Provide confidence score 0.0-1.0 based on clarity of intent.
+Provide a chain of thought rationale explaining your reasoning before giving the final intent and confidence score (0.0-1.0).
 """,
             model_settings=ModelSettings(
                 temperature=settings.intent_temperature,
@@ -54,4 +54,8 @@ Provide confidence score 0.0-1.0 based on clarity of intent.
             return result.final_output
         except Exception as e:
             logger.error(f"Failed to extract intent: {e}")
-            return EmailIntent(intent="neutral", confidence=0.5)
+            return EmailIntent(
+                rationale="Fallback rationale due to intent extraction failure.",
+                intent="neutral", 
+                confidence=0.5
+            )

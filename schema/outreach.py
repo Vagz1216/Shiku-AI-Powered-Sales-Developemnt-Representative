@@ -46,3 +46,12 @@ class OutreachRunRecord(BaseModel):
     message_id: str | None = None
     error: str | None = None
     dry_run: bool = False
+
+
+class CampaignExecutionResult(BaseModel):
+    """Structured output for the Senior Marketing Agent."""
+    rationale: str = Field(description="Chain of thought explaining the campaign execution, lead selection, and why the chosen email draft was best.")
+    selected_draft_type: str = Field(description="The type of email draft selected (e.g., professional, engaging, concise).")
+    sent_subject: str = Field(description="The subject line of the email that was sent.")
+    success: bool = Field(description="Whether the campaign execution was successful.")
+    error: str | None = Field(None, description="Error message if the execution failed.")

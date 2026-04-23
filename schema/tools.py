@@ -18,6 +18,8 @@ class LeadOut(BaseModel):
 
 
 class StaffOut(BaseModel):
-    """Staff output schema with name and email."""
+    """Staff output schema with name, email, timezone, and availability."""
     name: str = Field(description="Staff member's name")
     email: str = Field(description="Staff member's email address")
+    timezone: str | None = Field(None, description="Staff member's timezone")
+    availability: str | None = Field(None, description="Staff member's weekly availability in JSON format")

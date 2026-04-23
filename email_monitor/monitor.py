@@ -147,6 +147,20 @@ class EmailMonitorSystem:
                 
                 logger.info(f"Email security validation passed for {metadata['sender_email']}")
                 
+                # Llama Guard Validation - Check for prompt injection or malicious content
+                from utils.llama_guard import check_email_safety
+                safety_check = await check_email_safety(metadata['content'], metadata['subject'])
+                if not safety_check.is_safe:
+                    logger.warning(f"Llama Guard rejected email from {metadata['sender_email']}: {safety_check.violation_reason}")
+                    return EmailActionResult(
+                        action_taken="rejected_safety",
+                        success=True,
+                        error=f"Email rejected by Llama Guard: {safety_check.violation_reason}",
+                        message_id=metadata['message_id']
+                    )
+                
+                logger.info(f"Llama Guard safety check passed for {metadata['sender_email']}")
+                
                 # Step 1: Extract intent
                 intent = await self.intent_extractor.extract_intent(metadata['content'], metadata['subject'])
                 logger.info(f"Intent: {intent.intent} (confidence: {intent.confidence})")

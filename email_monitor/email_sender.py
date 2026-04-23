@@ -47,8 +47,8 @@ CRITICAL WORKFLOW RULES:
 1. ALWAYS send the approved response to the client using send_reply_email first
 2. ONLY create meetings if the classified intent is "meeting_request" - DO NOT create meetings for other intents like "question", "interest", "neutral", etc.
 3. For meeting_request intents ONLY:
-   a) Generate meeting details with generate_meeting_details
-   b) Get staff details (name + email) with get_staff_tool  
+   a) Get staff details (including name, email, availability, and timezone) with get_staff_tool  
+   b) Generate meeting details with generate_meeting_details, passing the staff's availability and timezone
    c) Create meeting with create_google_meeting (2 attendees: staff + client)
    d) Notify staff with notify_staff_about_meeting (pass MeetingDetails with conversation summary)
 

@@ -21,7 +21,7 @@ def get_staff_tool(staff_id: Optional[int] = None) -> Dict[str, Any]:
         staff_id: Optional ID of the staff member to get. If None, returns a random staff member.
         
     Returns:
-        Dict with success status, staff data (name and email), and error if any
+        Dict with success status, staff data (name, email, timezone, availability), and error if any
     """
     result = staff_service.get_staff(staff_id=staff_id)
     if result is None:

@@ -18,6 +18,7 @@ from tools.content_tools import (
     create_engaging_email,
     create_concise_email
 )
+from schema.outreach import CampaignExecutionResult
 
 
 # Setup logging
@@ -50,7 +51,7 @@ For email generation, provide:
 - name: The lead's company/contact name from get_lead_tool
 - value_proposition: The campaign value proposition from get_campaign_tool
 
-Complete the entire workflow and report success."""
+Complete the entire workflow and then output a final structured response explaining your rationale, which draft you chose, the sent subject, and success status."""
 
 
 class SeniorMarketingAgent:
@@ -88,16 +89,17 @@ class SeniorMarketingAgent:
                     name="SeniorMarketingAgent",
                     instructions=SENIOR_AGENT_INSTRUCTIONS,
                     prompt=prompt,
+                    output_type=CampaignExecutionResult,
                     tools=self.tools,
                     temperature=0.4,
-                    max_tokens=1000
+                    max_tokens=1500
                 )
                 
                 logger.info(f"Database-driven outreach campaign completed successfully using {provider}")
                 return {
-                    "success": True,
+                    "success": result.success,
                     "message": f"Automated campaign executed using {provider} with full database integration, tracing, and model fallback",
-                    "agent_result": str(result)
+                    "agent_result": result.model_dump()
                 }
                     
         except Exception as e:
