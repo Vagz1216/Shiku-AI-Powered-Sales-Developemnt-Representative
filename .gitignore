@@ -58,4 +58,17 @@ htmlcov/
 # mypy
 .mypy_cache/
 
-.sixthPasted image.png
+# SQLite WAL/SHM temp files
+*.sqlite3-shm
+*.sqlite3-wal
+
+# Binaries & archives
+ngrok
+ngrok-v3-stable-linux-amd64.tgz
+
+# Screenshots
+Pasted image.png
+
+# Node
+node_modules/
+.next/

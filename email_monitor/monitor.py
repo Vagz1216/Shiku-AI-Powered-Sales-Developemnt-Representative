@@ -2,7 +2,7 @@
 
 import logging
 import re
-from typing import Dict, Any
+from typing import Dict, Any, Optional, Callable, Awaitable
 from agentmail import AgentMail
 
 from config.logging import setup_logging
@@ -15,6 +15,7 @@ from .response_evaluator import ResponseEvaluator
 from .email_sender import EmailSenderAgent
 from .security import validate_email_security
 from .data_utils import get_email_metadata
+from utils.db_connection import get_conn
 
 # Setup logging
 setup_logging()
@@ -116,10 +117,63 @@ class EmailMonitorSystem:
             return f"Unable to fetch conversation history: {str(e)}"    
 
 
-    async def process_incoming_email(self, email_data: Dict[str, Any]) -> EmailActionResult:
+    def _update_lead_from_inbound(
+        self, sender_email: str, subject: str, content: str,
+        intent: str, reply_sent: bool
+    ):
+        """Match inbound email to a lead, log the message, and update lead status."""
+        try:
+            conn = get_conn()
+            cur = conn.execute("SELECT id, status FROM leads WHERE email = ?", (sender_email,))
+            row = cur.fetchone()
+            if not row:
+                logger.info(f"No lead record for {sender_email}, skipping DB update")
+                return
+
+            lead_id = row["id"]
+            import datetime
+            now_iso = datetime.datetime.utcnow().isoformat() + "Z"
+
+            with conn:
+                conn.execute(
+                    "INSERT INTO email_messages (lead_id, direction, subject, body, status, intent, processed) "
+                    "VALUES (?, 'inbound', ?, ?, 'RECEIVED', ?, 1)",
+                    (lead_id, subject, content[:2000], intent),
+                )
+                conn.execute(
+                    "UPDATE leads SET last_inbound_at = ? WHERE id = ?",
+                    (now_iso, lead_id),
+                )
+
+                # Only promote status when the reply was actually delivered.
+                # opt_out is always honoured regardless of send success.
+                if reply_sent:
+                    status_map = {
+                        "meeting_request": "MEETING_BOOKED",
+                        "interest": "WARM",
+                        "question": "WARM",
+                    }
+                    new_status = status_map.get(intent)
+                else:
+                    new_status = None
+
+                if intent == "opt_out":
+                    new_status = "OPTED_OUT"
+                    conn.execute("UPDATE leads SET email_opt_out = 1 WHERE id = ?", (lead_id,))
+
+                if new_status:
+                    conn.execute("UPDATE leads SET status = ? WHERE id = ?", (new_status, lead_id))
+
+            logger.info(f"Updated lead {lead_id} ({sender_email}): intent={intent}, status={new_status or 'unchanged'}")
+        except Exception as e:
+            logger.error(f"Failed to update lead from inbound email: {e}")
+
+    async def process_incoming_email(self, email_data: Dict[str, Any], callback: Optional[Callable[[str, str], Awaitable[None]]] = None) -> EmailActionResult:
         """Complete email processing pipeline with retry logic and meeting scheduling."""
         # Extract all email metadata in one efficient call
         metadata = get_email_metadata(email_data)
+        
+        if callback: await callback("info", f"Processing email from {metadata['sender_email']}: {metadata['subject']}")
         
         # Create a single trace for the entire email processing pipeline  
         trace_id = gen_trace_id()
@@ -130,14 +184,16 @@ class EmailMonitorSystem:
             metadata={"sender": metadata['sender_email'], "subject": metadata['subject']}
         ):
             try:
-                logger.info(f"Processing email from {metadata['sender_email']}: {metadata['subject']} (msg_id: {metadata['message_id']})")
+                if callback: await callback("info", f"Processing email from {metadata['sender_email']}: {metadata['subject']}")
                 
                 # Security validation - check before any LLM processing
                 is_valid, rejection_reason = validate_email_security(
                     metadata['content'], metadata['sender_email'], metadata['subject']
                 )
                 if not is_valid:
-                    logger.warning(f"Email validation failed from {metadata['sender_email']}: {rejection_reason}")
+                    msg = f"Email validation failed from {metadata['sender_email']}: {rejection_reason}"
+                    logger.warning(msg)
+                    if callback: await callback("error", msg)
                     return EmailActionResult(
                         action_taken="rejected_security",
                         success=True,  # Successfully rejected for security
@@ -145,13 +201,16 @@ class EmailMonitorSystem:
                         message_id=metadata['message_id']
                     )
                 
-                logger.info(f"Email security validation passed for {metadata['sender_email']}")
+                if callback: await callback("success", f"Security validation passed for {metadata['sender_email']}")
                 
                 # Llama Guard Validation - Check for prompt injection or malicious content
                 from utils.llama_guard import check_email_safety
+                if callback: await callback("info", "Running Llama Guard safety check...")
                 safety_check = await check_email_safety(metadata['content'], metadata['subject'])
                 if not safety_check.is_safe:
-                    logger.warning(f"Llama Guard rejected email from {metadata['sender_email']}: {safety_check.violation_reason}")
+                    msg = f"Llama Guard rejected email from {metadata['sender_email']}: {safety_check.violation_reason}"
+                    logger.warning(msg)
+                    if callback: await callback("error", msg)
                     return EmailActionResult(
                         action_taken="rejected_safety",
                         success=True,
@@ -159,11 +218,14 @@ class EmailMonitorSystem:
                         message_id=metadata['message_id']
                     )
                 
-                logger.info(f"Llama Guard safety check passed for {metadata['sender_email']}")
+                if callback: await callback("success", f"Llama Guard safety check passed")
                 
                 # Step 1: Extract intent
+                if callback: await callback("info", "Extracting email intent...")
                 intent = await self.intent_extractor.extract_intent(metadata['content'], metadata['subject'])
-                logger.info(f"Intent: {intent.intent} (confidence: {intent.confidence})")
+                msg = f"Extracted Intent: {intent.intent} (confidence: {intent.confidence})"
+                logger.info(msg)
+                if callback: await callback("success", msg)
                 
                 # Step 2: Get conversation context (excluding current message to avoid duplication)
                 conversation_history = await self.fetch_conversation_history(
@@ -174,6 +236,8 @@ class EmailMonitorSystem:
                 max_retries = 2
                 retry_count = 0
                 
+                if callback: await callback("info", "Generating appropriate response...")
+                
                 while retry_count <= max_retries:
                     # Generate response with clean extracted data instead of raw webhook payload
                     response_result = await self.response_agent.generate_response(
@@ -182,6 +246,8 @@ class EmailMonitorSystem:
                     
                     # Handle skipped responses
                     if response_result.action == "skipped":
+                        msg = f"Skipping response: {response_result.reason}"
+                        if callback: await callback("success", msg)
                         return EmailActionResult(
                             action_taken="skipped",
                             success=True,
@@ -189,6 +255,8 @@ class EmailMonitorSystem:
                         )
                     
                     if response_result.action != "generated":
+                        msg = f"Failed to generate response: {response_result.reason}"
+                        if callback: await callback("error", msg)
                         return EmailActionResult(
                             action_taken="error",
                             success=False,
@@ -197,6 +265,12 @@ class EmailMonitorSystem:
                     
                     # Step 4: Evaluate response
                     response_text = response_result.response_text
+                    
+                    # Log the response we are about to evaluate
+                    eval_msg = f"Evaluating response attempt {retry_count + 1}..."
+                    logger.info(eval_msg)
+                    if callback: await callback("info", eval_msg)
+                    
                     evaluation_context = {**metadata, "intent": intent.intent}
                     
                     evaluation = await self.response_evaluator.evaluate_response(
@@ -205,17 +279,23 @@ class EmailMonitorSystem:
                     
                     # If approved, proceed to sending
                     if evaluation.approved:
-                        logger.info(f"Response approved on attempt {retry_count + 1}")
+                        msg = f"Response approved on attempt {retry_count + 1}"
+                        logger.info(msg)
+                        if callback: await callback("success", msg)
                         break
                     
                     # If not approved and we have retries left
                     retry_count += 1
                     if retry_count <= max_retries:
-                        logger.warning(f"Response rejected (attempt {retry_count}): {evaluation.reason}. Retrying...")
+                        msg = f"Response rejected (attempt {retry_count}): {evaluation.reason}. Retrying..."
+                        logger.warning(msg)
+                        if callback: await callback("warning", msg)
                         # Add feedback to context for next attempt
                         conversation_history += f"\n\nPrevious response was rejected: {evaluation.reason}. Please improve the response."
                     else:
-                        logger.error(f"Response rejected after {max_retries + 1} attempts: {evaluation.reason}")
+                        msg = f"Response rejected after {max_retries + 1} attempts: {evaluation.reason}"
+                        logger.error(msg)
+                        if callback: await callback("error", msg)
                         return EmailActionResult(
                             action_taken="rejected",
                             success=False,
@@ -229,13 +309,23 @@ class EmailMonitorSystem:
                     "conversation_history": conversation_history
                 }
                 
+                if callback: await callback("info", "Executing action and sending email/booking meeting...")
                 result = await self.email_sender.execute_action(response_text, email_context)
-                
-                logger.info(f"Email processing completed: {result.action_taken}")
+
+                self._update_lead_from_inbound(
+                    metadata['sender_email'], metadata['subject'],
+                    metadata['content'], intent.intent, result.success
+                )
+
+                msg = f"Email processing completed: {result.action_taken}"
+                logger.info(msg)
+                if callback: await callback("success", msg)
                 return result
                 
             except Exception as e:
-                logger.error(f"Error processing email: {e}")
+                msg = f"Error processing email: {e}"
+                logger.error(msg)
+                if callback: await callback("error", msg)
                 return EmailActionResult(
                     action_taken="error",
                     success=False,

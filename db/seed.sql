@@ -15,7 +15,7 @@ INSERT OR IGNORE INTO campaigns (id, name, value_proposition, cta, status) VALUE
 
 -- Sample leads
 INSERT OR IGNORE INTO leads (id, email, name, company, industry, pain_points, status, email_opt_out, touch_count) VALUES
-  (1, 'benjamin92clarke.com', 'Benjamin', 'Benjamin Legal Tech', 'Legal Technology', 'Complex document management and compliance tracking', 'NEW', 0, 0),
+  (1, 'benjamin92clarke@gmail.com', 'Benjamin', 'Benjamin Legal Tech', 'Legal Technology', 'Complex document management and compliance tracking', 'NEW', 0, 0),
   (2, 'darrielcollins4@gmail.com', 'Collins', 'Darriel Solutions', 'Software Development', 'Scaling development processes and team coordination', 'NEW', 0, 0),
   (3, 'martinkam1216@gmail.com', 'Martinkam1216', 'MarTechKam Inc', 'Marketing Technology', 'Customer attribution and campaign optimization', 'NEW', 0, 0),
   (4, 'martinezzval12@gmail.com', 'Darriel', 'Darriel Financial', 'Financial Technology', 'SOC2 compliance for enterprise sales acceleration', 'NEW', 0, 0),
@@ -25,17 +25,17 @@ INSERT OR IGNORE INTO leads (id, email, name, company, industry, pain_points, st
 -- Link leads to campaign 1
 INSERT OR IGNORE INTO campaign_leads (campaign_id, lead_id, emails_sent) VALUES
   (1,1,0),
-  (1,2,1),
+  (1,2,0),
   (1,3,0),
   (1,4,0),
   (1,5,0),
   (1,6,0);
 
 -- Sample staff
-INSERT OR IGNORE INTO staff (id, name, email, timezone, availability) VALUES
-  (1, 'Benjamin', 'benjamin92clarke.com', 'UTC', '{"monday": ["09:00-12:00","13:00-17:00"]}'),
-  (2, 'Collins', 'darrielcollins4@gmail.com', 'America/New_York', '{"tuesday": ["10:00-15:00"]}'),
-  (3, 'Darriel', 'martinezzval12@gmail.com', 'America/Los_Angeles', '{"wednesday": ["11:00-16:00"]}'),
-  (4, 'Elvomanton', 'elvomanton@gmail.com', 'America/Chicago', '{"thursday": ["09:00-12:00","13:00-17:00"]}'),
-  (5, 'Martinkam', 'martinkam1216@gmail.com', 'America/Los_Angeles', '{"friday": ["10:00-15:00"]}'),
-  (6, 'Gabriel', 'gabriellegarcia9090@gmail.com', 'America/New_York', '{"monday": ["09:00-12:00","13:00-17:00"]}');
+INSERT OR IGNORE INTO staff (id, name, email, timezone, availability, dummy_slots) VALUES
+  (1, 'Benjamin', 'benjamin92clarke@gmail.com', 'UTC', '{"monday": ["09:00-12:00","13:00-17:00"]}', '["2026-04-28 10:00", "2026-04-28 14:00", "2026-04-29 11:00"]'),
+  (2, 'Collins', 'darrielcollins4@gmail.com', 'America/New_York', '{"tuesday": ["10:00-15:00"]}', '["2026-04-28 11:00", "2026-04-29 10:00", "2026-04-29 13:00"]'),
+  (3, 'Darriel', 'martinezzval12@gmail.com', 'America/Los_Angeles', '{"wednesday": ["11:00-16:00"]}', '["2026-04-29 12:00", "2026-04-29 15:00", "2026-04-30 11:00"]'),
+  (4, 'Elvomanton', 'elvomanton@gmail.com', 'America/Chicago', '{"thursday": ["09:00-12:00","13:00-17:00"]}', '["2026-04-30 10:00", "2026-04-30 14:00", "2026-05-01 09:00"]'),
+  (5, 'Martinkam', 'martinkam1216@gmail.com', 'America/Los_Angeles', '{"friday": ["10:00-15:00"]}', '["2026-05-01 11:00", "2026-05-01 13:00", "2026-05-04 10:00"]'),
+  (6, 'Gabriel', 'gabriellegarcia9090@gmail.com', 'America/New_York', '{"monday": ["09:00-12:00","13:00-17:00"]}', '["2026-04-28 09:00", "2026-04-28 15:00", "2026-04-29 14:00"]');

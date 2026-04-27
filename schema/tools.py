@@ -12,9 +12,13 @@ class SendEmailResult(BaseModel):
 
 
 class LeadOut(BaseModel):
-    """Lead output schema with name and email."""
+    """Lead output schema with full details."""
+    id: int | None = Field(None, description="Lead's ID")
     name: str | None = Field(None, description="Lead's name")
     email: str = Field(description="Lead's email address")
+    company: str | None = Field(None, description="Lead's company")
+    industry: str | None = Field(None, description="Lead's industry")
+    pain_points: str | None = Field(None, description="Lead's pain points")
 
 
 class StaffOut(BaseModel):

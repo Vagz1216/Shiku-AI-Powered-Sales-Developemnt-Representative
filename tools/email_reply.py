@@ -28,23 +28,65 @@ def send_reply_email(to_email: str, message: str, message_id: str = None, thread
         Dict with send result
     """
     try:
+        # Failsafe for smaller models that might pass literal "\n" instead of actual newlines
+        if message and isinstance(message, str):
+            message = message.replace('\\n', '\n')
+            
+        if settings.require_human_approval:
+            from utils.db_connection import get_conn
+            import datetime
+            conn = get_conn()
+            try:
+                with conn:
+                    # Find lead_id
+                    cur = conn.execute("SELECT id FROM leads WHERE email = ?", (to_email,))
+                    row = cur.fetchone()
+                    lead_id = row['id'] if row else None
+                    
+                    # Save as draft
+                    now_iso = datetime.datetime.utcnow().isoformat() + 'Z'
+                    conn.execute(
+                        "INSERT INTO email_messages (lead_id, direction, subject, body, status, processed, created_at) VALUES (?, 'outbound', ?, ?, 'draft', 1, ?)",
+                        (lead_id, subject or "Re: Your Message", message, now_iso)
+                    )
+                logger.info(f"Saved reply draft to {to_email} due to require_human_approval=True")
+                return {
+                    'success': True,
+                    'message_id': "draft",
+                    'thread_id': "draft",
+                    'method': 'draft'
+                }
+            except Exception as e:
+                logger.error(f"Failed to save draft: {e}")
+                return {'success': False, 'error': f"Failed to save draft: {e}"}
+
         client = AgentMail(api_key=settings.agentmail_api_key)
         
         # If we have message_id, use the proper reply API (preferred)
         if message_id:
             logger.info(f"Sending reply to message {message_id}")
-            response = client.inboxes.messages.reply(
-                inbox_id=settings.agentmail_inbox_id,
-                message_id=message_id,
-                text=message
-            )
             
-            return {
-                'success': True,
-                'message_id': str(response.message_id),
-                'thread_id': str(response.thread_id),
-                'method': 'reply'
-            }
+            # Try formatting the message_id properly as required by AgentMail API
+            try:
+                response = client.inboxes.messages.reply(
+                    inbox_id=settings.agentmail_inbox_id,
+                    message_id=message_id,  # Use original message_id since SDK might handle formatting
+                    text=message
+                )
+                
+                return {
+                    'success': True,
+                    'message_id': str(response.id) if hasattr(response, 'id') else str(getattr(response, 'message_id', 'unknown')),
+                    'thread_id': str(response.thread_id) if hasattr(response, 'thread_id') else 'unknown',
+                    'method': 'reply'
+                }
+            except Exception as e:
+                if "404" in str(e) or "not found" in str(e).lower() or "400" in str(e):
+                    logger.warning(f"Failed to reply with message_id {message_id}, falling back to new message: {e}")
+                    # Let it fall through to the new message fallback below
+                else:
+                    logger.error(f"Error during reply: {e}")
+                    raise e
         
         # Fallback: send new message (less ideal for threading)
         logger.warning(f"No message_id provided, sending new message to {to_email}")
@@ -74,12 +116,17 @@ def send_reply_email(to_email: str, message: str, message_id: str = None, thread
         else:
             send_kwargs['subject'] = "Re: Your Message"
         
-        response = client.inboxes.messages.send(settings.agentmail_inbox_id, **send_kwargs)
+        response = client.inboxes.messages.send(
+            inbox_id=settings.agentmail_inbox_id, 
+            to=to_email,
+            subject=send_kwargs.get('subject', 'Re: Your Message'),
+            text=message
+        )
         
         return {
             'success': True,
-            'message_id': str(response.message_id),
-            'thread_id': str(response.thread_id),
+            'message_id': str(response.id) if hasattr(response, 'id') else str(getattr(response, 'message_id', 'unknown')),
+            'thread_id': str(response.thread_id) if hasattr(response, 'thread_id') else 'unknown',
             'method': 'new_message'
         }
         

@@ -32,6 +32,11 @@ Evaluate the response for:
 - Appropriate content for business context  
 - No inappropriate, offensive, or unprofessional content
 - Clear and helpful response to the inquiry
+- COMPLETENESS: Ensure the email does not end abruptly or have cut-off sentences.
+- SIGNATURE: Ensure the email ends with a professional signature.
+- SCHEDULING: ONLY for "meeting_request" intents, ensure the email mentions a calendar invite or link. For all other intents (question, interest, etc.), DO NOT check for scheduling info; focus purely on tone and accuracy.
+
+If the email is cut off (e.g., ends in the middle of a sentence like "doesn't"), you MUST reject it.
 
 Provide a chain of thought rationale explaining your evaluation before returning a simple pass/fail decision.
 """,
@@ -52,7 +57,16 @@ Provide a chain of thought rationale explaining your evaluation before returning
         
         context = f"Response: {response_text}\\nRecipient: {sender_name} ({sender_email})\\nSubject: {subject}\\nIntent: {intent}"
         try:
-            result = await Runner.run(self.agent, context)
+            from utils.model_fallback import run_agent_with_fallback
+            
+            result, provider = await run_agent_with_fallback(
+                name="EmailResponseEvaluator",
+                instructions=self.agent.instructions,
+                prompt=context,
+                output_type=ResponseEvaluation,
+                temperature=0.2,
+                max_tokens=300
+            )
             evaluation = result.final_output
             logger.info(f"Response evaluation: {'APPROVED' if evaluation.approved else 'REJECTED'} - {evaluation.reason}")
             return evaluation

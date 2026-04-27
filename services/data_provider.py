@@ -9,8 +9,8 @@ class LeadProvider(ABC):
     """
 
     @abstractmethod
-    def get_leads(self, email_cap: int = 5) -> Dict[str, Any]:
-        """Return leads eligible for outreach."""
+    def get_leads(self, campaign_id: Optional[int] = None, max_leads: Optional[int] = None, order_by: str = 'newest_first') -> Dict[str, Any]:
+        """Get leads eligible for outreach."""
         pass
 
     @abstractmethod

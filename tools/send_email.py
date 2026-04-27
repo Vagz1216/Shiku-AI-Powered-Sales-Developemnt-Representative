@@ -1,6 +1,8 @@
 """Send outbound email via AgentMail for agent tools and the outreach pipeline."""
 
+import logging
 import time
+from datetime import date
 from email.utils import formataddr
 
 from agentmail import AgentMail
@@ -12,23 +14,113 @@ from schema import SendEmailResult
 import asyncio
 from utils.llama_guard import check_email_safety
 
+logger = logging.getLogger(__name__)
 
-async def send_plain_email(email: str, name: str, subject: str, body: str) -> SendEmailResult:
+_daily_send_counts: dict[str, int] = {}
+
+
+def _check_daily_limit() -> str | None:
+    """Return an error string if the daily email limit has been reached."""
+    today = date.today().isoformat()
+    if today not in _daily_send_counts:
+        _daily_send_counts.clear()
+        _daily_send_counts[today] = 0
+    if _daily_send_counts[today] >= settings.daily_email_limit:
+        return f"Daily email limit reached ({settings.daily_email_limit}). Try again tomorrow."
+    return None
+
+
+def _increment_daily_count():
+    today = date.today().isoformat()
+    _daily_send_counts[today] = _daily_send_counts.get(today, 0) + 1
+
+
+def _check_forbidden_phrases(body: str) -> str | None:
+    """Return an error if the body contains any forbidden phrases."""
+    if not settings.forbidden_phrases:
+        return None
+    phrases = [p.strip().lower() for p in settings.forbidden_phrases.split(",") if p.strip()]
+    body_lower = body.lower()
+    for phrase in phrases:
+        if phrase in body_lower:
+            return f"Email body contains forbidden phrase: '{phrase}'"
+    return None
+
+
+def _enforce_max_words(body: str) -> str:
+    """Truncate body to max_words_per_email if exceeded."""
+    words = body.split()
+    if len(words) > settings.max_words_per_email:
+        logger.warning(f"Email body truncated from {len(words)} to {settings.max_words_per_email} words")
+        return " ".join(words[: settings.max_words_per_email])
+    return body
+
+
+def _ensure_opt_out_footer(body: str) -> str:
+    """Append opt-out footer if no opt-out wording is present."""
+    opt_out_keywords = ["stop", "unsubscribe", "opt out", "opt-out", "remove me"]
+    if any(kw in body.lower() for kw in opt_out_keywords):
+        return body
+    return body + settings.opt_out_footer
+
+
+async def send_plain_email(
+    email: str, name: str, subject: str, body: str,
+    skip_safety_check: bool = False,
+    internal: bool = False,
+) -> SendEmailResult:
     """Send a plain-text email via AgentMail (no agent wrapper).
 
-    Use this from the outreach pipeline.     The monitoring stack wraps the same logic as send_agent_email for OpenAI Agents.
+    Args:
+        internal: If True, skip safety check AND opt-out footer (for staff notifications).
+        skip_safety_check: Legacy flag, same effect as internal for safety check only.
     """
     if error := _validate_inputs(email, subject, body):
         return SendEmailResult(ok=False, error=error)
+
+    if error := _check_daily_limit():
+        return SendEmailResult(ok=False, error=error)
+
+    if not internal:
+        if error := _check_forbidden_phrases(body):
+            return SendEmailResult(ok=False, error=error)
+
+    body = _enforce_max_words(body)
+    if not internal:
+        body = _ensure_opt_out_footer(body)
+
+    if not (skip_safety_check or internal):
+        safety_check = await check_email_safety(body, subject)
+        if not safety_check.is_safe:
+            return SendEmailResult(ok=False, error=f"Safety check failed: {safety_check.violation_reason}")
         
-    # AI-based Validation Guardrail (Llama Guard logic)
-    safety_check = await check_email_safety(body, subject)
-    if not safety_check.is_safe:
-        return SendEmailResult(ok=False, error=f"Safety check failed: {safety_check.violation_reason}")
-        
+    if settings.require_human_approval:
+        from utils.db_connection import get_conn
+        import datetime
+        conn = get_conn()
+        try:
+            with conn:
+                # Find lead_id
+                cur = conn.execute("SELECT id FROM leads WHERE email = ?", (email,))
+                row = cur.fetchone()
+                lead_id = row['id'] if row else None
+                
+                # Save as draft
+                now_iso = datetime.datetime.utcnow().isoformat() + 'Z'
+                conn.execute(
+                    "INSERT INTO email_messages (lead_id, direction, subject, body, status, processed, created_at) VALUES (?, 'outbound', ?, ?, 'draft', 1, ?)",
+                    (lead_id, subject, body, now_iso)
+                )
+            return SendEmailResult(ok=True, message_id="draft", thread_id="draft")
+        except Exception as e:
+            return SendEmailResult(ok=False, error=f"Failed to save draft: {e}")
+
     if error := _validate_config():
         return SendEmailResult(ok=False, error=error)
-    return _send_with_retry(email, name, subject, body)
+    result = _send_with_retry(email, name, subject, body)
+    if result.ok:
+        _increment_daily_count()
+    return result
 
 
 @function_tool

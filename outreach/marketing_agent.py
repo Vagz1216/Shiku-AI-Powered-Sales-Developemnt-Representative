@@ -1,110 +1,181 @@
-"""Senior Marketing Agent that orchestrates database-driven outreach campaigns with tracing."""
+"""Senior Marketing Orchestrator that coordinates database-driven outreach campaigns."""
 
 import logging
 import json
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Callable, Awaitable
 
 from config.logging import setup_logging
-from agents import set_default_openai_key, trace, gen_trace_id
-from config import settings
-from utils.model_fallback import run_agent_with_fallback
+from agents import trace, gen_trace_id
 
-# Import database-driven tools
-from tools.campaign_tools import get_campaign_tool
-from tools.lead_tools import get_lead_tool
-from tools.send_email import send_agent_email
-from tools.content_tools import (
-    create_professional_email,
-    create_engaging_email,
-    create_concise_email
-)
-from schema.outreach import CampaignExecutionResult
-
+from tools.campaign_tools import fetch_campaign_info
+from tools.lead_tools import fetch_lead_info
+from tools.send_email import send_plain_email
+from outreach.workers import run_drafter_agent, run_reviewer_agent
+from services import lead_service
 
 # Setup logging
 setup_logging()
 logger = logging.getLogger(__name__)
 
-# Set OpenAI API key for agents library
-if settings.openai_api_key:
-    set_default_openai_key(settings.openai_api_key)
+# Type for SSE callback
+SSECallback = Callable[[str, str], Awaitable[None]]
 
-
-# Senior Agent Instructions
-SENIOR_AGENT_INSTRUCTIONS = """You are a Senior Marketing Agent that orchestrates outreach campaigns. Follow this EXACT workflow:
-
-1. **Get Campaign**: Use get_campaign_tool to retrieve campaign details from database. If a specific campaign name is provided in the prompt, pass it to the tool.
-2. **Get Lead**: Use get_lead_tool to retrieve target lead information 
-3. **Generate Content**: Create 3 email variations using:
-   - create_professional_email
-   - create_engaging_email  
-   - create_concise_email
-4. **Evaluate & Select**: Compare the 3 drafts and choose the BEST one based on:
-   - Relevance to campaign value proposition
-   - Personalization for the lead
-   - Professional quality and clarity
-5. **Send ONE Email**: Use send_agent_email to send ONLY the selected best email
-
-IMPORTANT: Send exactly ONE email per campaign. Do not send multiple emails.
-
-For email generation, provide:
-- name: The lead's company/contact name from get_lead_tool
-- value_proposition: The campaign value proposition from get_campaign_tool
-
-Complete the entire workflow and then output a final structured response explaining your rationale, which draft you chose, the sent subject, and success status."""
-
-
-class SeniorMarketingAgent:
-    """Orchestrates complete database-driven outreach campaigns with AI content generation."""
+class OutreachOrchestrator:
+    """Orchestrates complete database-driven outreach campaigns using Worker Agents."""
     
-    def __init__(self):
-        # Collect all database-driven outreach tools
-        self.tools = [
-            get_campaign_tool,
-            get_lead_tool,
-            create_professional_email,
-            create_engaging_email,
-            create_concise_email,
-            send_agent_email
-        ]
-    
-    async def execute_campaign(self, campaign_name: Optional[str] = None) -> Dict[str, Any]:
-        """Execute a complete database-driven outreach campaign with tracing and fallback."""
-        logger.info(f"Starting automated database-driven outreach campaign. Target: {campaign_name or 'Random'}")
+    async def execute_campaign(
+        self, 
+        campaign_name: Optional[str] = None,
+        callback: Optional[SSECallback] = None
+    ) -> Dict[str, Any]:
+        """Execute a complete database-driven outreach campaign via Worker Agents."""
+        msg = f"Starting Orchestrator for campaign. Target: {campaign_name or 'Random'}"
+        logger.info(msg)
+        if callback: await callback("info", msg)
         
-        prompt = "Execute automated outreach campaign"
-        if campaign_name:
-            prompt += f" for campaign: {campaign_name}"
-        
-        # Use structured trace with gen_trace_id to match monitor.py style
         trace_id = gen_trace_id()
         
         try:
             with trace(
-                workflow_name="Outreach Campaign Execution Pipeline",
+                workflow_name="Outreach Campaign Orchestrator Pipeline",
                 trace_id=trace_id,
                 metadata={"campaign": campaign_name or "random_active"}
             ):
-                result, provider = await run_agent_with_fallback(
-                    name="SeniorMarketingAgent",
-                    instructions=SENIOR_AGENT_INSTRUCTIONS,
-                    prompt=prompt,
-                    output_type=CampaignExecutionResult,
-                    tools=self.tools,
-                    temperature=0.4,
-                    max_tokens=1500
-                )
+                # 1. Get Campaign
+                msg = "Fetching campaign details..."
+                logger.info(msg)
+                if callback: await callback("info", msg)
                 
-                logger.info(f"Database-driven outreach campaign completed successfully using {provider}")
-                return {
-                    "success": result.success,
-                    "message": f"Automated campaign executed using {provider} with full database integration, tracing, and model fallback",
-                    "agent_result": result.model_dump()
+                campaign = fetch_campaign_info(campaign_name=campaign_name)
+                if not campaign:
+                    err_msg = "No active campaign found"
+                    if callback: await callback("error", err_msg)
+                    return {"success": False, "error": err_msg}
+                
+                # 2. Get Lead
+                msg = f"Fetching lead for campaign: {campaign.name}..."
+                logger.info(msg)
+                if callback: await callback("info", msg)
+                
+                lead_res = fetch_lead_info()
+                if not lead_res.get("success"):
+                    err_msg = f"Failed to get lead: {lead_res.get('error')}"
+                    if callback: await callback("error", err_msg)
+                    return {"success": False, "error": err_msg}
+                lead_data = lead_res["data"]
+                
+                camp_info = {
+                    "name": campaign.name,
+                    "value_proposition": campaign.value_proposition,
                 }
+                lead_info = {
+                    "name": lead_data.get("name", "Valued Contact"),
+                    "email": lead_data.get("email"),
+                    "company": lead_data.get("company", "Your Company"),
+                    "industry": lead_data.get("industry", "Business"),
+                    "pain_points": lead_data.get("pain_points", "Operational challenges")
+                }
+                
+                # 3. Delegate to Drafter Agent
+                msg = f"Delegating to DrafterAgent for lead: {lead_info['name']}..."
+                logger.info(msg)
+                if callback: await callback("info", msg)
+                
+                drafts = await run_drafter_agent(camp_info, lead_info)
+                
+                # 4. Delegate to Reviewer Agent
+                msg = "Drafts generated. Reviewing and selecting best version..."
+                logger.info(msg)
+                if callback: await callback("info", msg)
+                
+                review_result = await run_reviewer_agent(camp_info, lead_info, drafts)
+                
+                # 5. Handle Email Delivery (Auto-approve vs Human Approval)
+                if campaign.auto_approve_drafts:
+                    msg = f"Auto-approve enabled. Sending '{review_result.selected_draft_type}' email to {lead_info['email']} directly..."
+                    logger.info(msg)
+                    if callback: await callback("info", msg)
+                    
+                    send_res = await send_plain_email(
+                        email=lead_info["email"],
+                        name=lead_info["name"],
+                        subject=review_result.subject,
+                        body=review_result.body
+                    )
+                    
+                    if send_res.ok:
+                        try:
+                            from utils.db_connection import get_conn
+                            with get_conn() as conn:
+                                conn.execute(
+                                    "INSERT INTO email_messages (lead_id, campaign_id, direction, subject, body, status, approved) VALUES (?, ?, 'outbound', ?, ?, 'SENT', 1)",
+                                    (lead_data.get("id"), campaign.id, review_result.subject, review_result.body)
+                                )
+                        except Exception as e:
+                            logger.error(f"Failed to log sent email to database: {e}")
+
+                        lead_id = lead_data.get("id")
+                        if lead_id:
+                            lead_service.update_lead_touch(lead_id, campaign.id)
+                            lead_service.update_lead_status(lead_id, "CONTACTED")
+
+                        final_msg = "Database-driven outreach campaign completed successfully via Orchestrator (Auto-approved)"
+                        logger.info(final_msg)
+                        if callback: await callback("success", final_msg)
+                        
+                        return {
+                            "success": True,
+                            "message": f"Automated campaign executed using Orchestrator pattern. Sent {review_result.selected_draft_type} draft (Auto-approved).",
+                            "agent_result": {
+                                "rationale": review_result.rationale,
+                                "selected_draft_type": review_result.selected_draft_type,
+                                "sent_subject": review_result.subject,
+                                "success": True
+                            }
+                        }
+                    else:
+                        err_msg = f"Email delivery failed: {send_res.error}"
+                        if callback: await callback("error", err_msg)
+                        return {"success": False, "error": send_res.error}
+                else:
+                    msg = f"Review complete. Saving '{review_result.selected_draft_type}' email draft for {lead_info['email']} to approval queue..."
+                    logger.info(msg)
+                    if callback: await callback("info", msg)
+                    
+                    try:
+                        from utils.db_connection import get_conn
+                        with get_conn() as conn:
+                            conn.execute(
+                                "INSERT INTO email_messages (lead_id, campaign_id, direction, subject, body, status, approved) VALUES (?, ?, 'outbound', ?, ?, 'DRAFT', 0)",
+                                (lead_data.get("id"), campaign.id, review_result.subject, review_result.body)
+                            )
+                    except Exception as e:
+                        logger.error(f"Failed to save draft to database: {e}")
+
+                    lead_id = lead_data.get("id")
+                    if lead_id:
+                        lead_service.update_lead_touch(lead_id, campaign.id)
+
+                    final_msg = "Draft generated and saved to approval queue."
+                    logger.info(final_msg)
+                    if callback: await callback("success", final_msg)
+                    
+                    return {
+                        "success": True,
+                        "message": f"Draft saved for human approval. Selected {review_result.selected_draft_type} draft.",
+                        "agent_result": {
+                            "rationale": review_result.rationale,
+                            "selected_draft_type": review_result.selected_draft_type,
+                            "sent_subject": review_result.subject,
+                            "success": True
+                        }
+                    }
                     
         except Exception as e:
-            logger.error(f"Campaign execution error: {e}")
+            err_msg = f"Campaign execution error: {str(e)}"
+            logger.error(err_msg)
+            if callback: await callback("error", err_msg)
             return {"success": False, "error": str(e)}
 
 # Create global instance for API usage
-senior_marketing_agent = SeniorMarketingAgent()
+outreach_orchestrator = OutreachOrchestrator()

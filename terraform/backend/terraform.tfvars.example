@@ -1,0 +1,27 @@
+aws_region = "us-east-1"
+
+# From terraform/database outputs
+cluster_arn = "arn:aws:rds:us-east-1:ACCOUNT:cluster:sdr-cluster"
+secret_arn  = "arn:aws:secretsmanager:us-east-1:ACCOUNT:secret:sdr-aurora-credentials-xxxx"
+db_name     = "sdr"
+
+# AI providers
+openai_api_key     = "sk-..."
+groq_api_key       = ""
+cerebras_api_key   = ""
+openrouter_api_key = ""
+
+# AgentMail
+agentmail_api_key  = "your-agentmail-api-key"
+agentmail_inbox_id = "your-inbox-id"
+
+# Composio (optional)
+composio_api_key = ""
+
+# Clerk auth
+clerk_jwks_url   = "https://your-clerk.clerk.accounts.dev/.well-known/jwks.json"
+clerk_secret_key = "sk_test_..."
+
+# Security
+webhook_secret = ""
+cors_origins   = "http://localhost:3000"

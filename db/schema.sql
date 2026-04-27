@@ -22,7 +22,12 @@ CREATE TABLE IF NOT EXISTS campaigns (
     name TEXT NOT NULL,
     value_proposition TEXT,
     cta TEXT,
-    status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK(status IN ('ACTIVE','PAUSED','INACTIVE'))
+    status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK(status IN ('ACTIVE','PAUSED','INACTIVE')),
+    meeting_delay_days INTEGER NOT NULL DEFAULT 1,
+    max_leads_per_campaign INTEGER,
+    lead_selection_order TEXT NOT NULL DEFAULT 'newest_first',
+    auto_approve_drafts INTEGER NOT NULL DEFAULT 0 CHECK(auto_approve_drafts IN (0,1)),
+    max_emails_per_lead INTEGER NOT NULL DEFAULT 5
 );
 
 -- Campaign Leads (join)
@@ -48,6 +53,7 @@ CREATE TABLE IF NOT EXISTS email_messages (
     status TEXT,
     intent TEXT,
     processed INTEGER NOT NULL DEFAULT 0 CHECK(processed IN (0,1)),
+    approved INTEGER NOT NULL DEFAULT 0 CHECK(approved IN (0,1,-1)), -- 0: pending, 1: approved, -1: rejected
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (lead_id) REFERENCES leads(id) ON DELETE CASCADE,
     FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE SET NULL
@@ -73,6 +79,7 @@ CREATE TABLE IF NOT EXISTS staff (
     email TEXT NOT NULL UNIQUE,
     timezone TEXT,
     availability TEXT,
+    dummy_slots TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

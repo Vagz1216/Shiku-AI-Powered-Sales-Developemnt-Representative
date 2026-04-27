@@ -4,7 +4,7 @@ from schema import SendEmailResult
 
 from .send_email import send_agent_email, send_plain_email
 from .email_reply import send_reply_email
-from .google_calendar import create_google_meeting
+from .google_calendar import create_google_meeting, get_upcoming_free_slots
 from .notify_staff import notify_staff_about_meeting
 from .generate_meeting_details import generate_meeting_details
 from .staff_tools import get_staff_tool

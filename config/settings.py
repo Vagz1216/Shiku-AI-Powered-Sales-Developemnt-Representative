@@ -47,11 +47,26 @@ class AppConfig(BaseSettings):
         gt=0, le=65535
     )
 
-    # Database (SQLAlchemy; outreach bootstrap uses db/schema.sql for SQLite)
+    # Database - SQLite (local) or Aurora Data API (production)
     database_url: str = Field(
         default="sqlite:///./db/sdr.sqlite3",
         validation_alias="DATABASE_URL",
         description="Database URL (default: SQLite next to db/schema.sql)",
+    )
+    db_cluster_arn: str | None = Field(
+        default=None,
+        validation_alias="DB_CLUSTER_ARN",
+        description="Aurora cluster ARN for Data API (when set, overrides database_url)",
+    )
+    db_secret_arn: str | None = Field(
+        default=None,
+        validation_alias="DB_SECRET_ARN",
+        description="Secrets Manager ARN for Aurora credentials",
+    )
+    db_name_aurora: str = Field(
+        default="sdr",
+        validation_alias="DB_NAME",
+        description="Aurora database name",
     )
 
     # API Keys (.env: OPENAI_API_KEY, AGENTMAIL_*)
@@ -59,6 +74,11 @@ class AppConfig(BaseSettings):
         default=None,
         validation_alias="OPENAI_API_KEY",
         description="OpenAI API key for AI model access",
+    )
+    openai_tracing_key: str | None = Field(
+        default=None,
+        validation_alias="OPENAI_TRACING_KEY",
+        description="Separate OpenAI API key used only for traces export. If unset, uses OPENAI_API_KEY.",
     )
     openrouter_api_key: str | None = Field(
         default=None,
@@ -68,12 +88,12 @@ class AppConfig(BaseSettings):
     cerebras_api_key: str | None = Field(
         default=None,
         validation_alias="CEREBRAS_API_KEY",
-        description="Cerebras API key for fallback AI access",
+        description="Cerebras API key(s) for fallback AI access. Comma-separated for multiple keys.",
     )
     groq_api_key: str | None = Field(
         default=None,
         validation_alias="GROQ_API_KEY",
-        description="Groq API key for fallback AI access",
+        description="Groq API key(s) for fallback AI access. Comma-separated for multiple keys.",
     )
     agentmail_api_key: str | None = Field(
         default=None,
@@ -127,6 +147,35 @@ class AppConfig(BaseSettings):
         le=2000,
     )
 
+    # SaaS / System Configuration
+    use_dummy_data: bool = Field(
+        default=True,
+        description="Use dummy database data for external tools like Calendar in capstone demo"
+    )
+    default_meeting_delay_days: int = Field(
+        default=1,
+        description="Number of days to wait before proposing a meeting if not specified by the lead",
+        ge=0
+    )
+    max_leads_per_campaign: int = Field(
+        default=50,
+        description="Maximum number of leads to process in a single campaign run",
+        gt=0
+    )
+    lead_selection_order: str = Field(
+        default="newest_first",
+        description="Order in which leads are selected for a campaign (newest_first, oldest_first, highest_score)"
+    )
+    daily_email_limit: int = Field(
+        default=200,
+        description="Maximum number of emails the system can send per day to protect sender reputation",
+        gt=0
+    )
+    require_human_approval: bool = Field(
+        default=False,
+        description="If True, emails are saved as drafts for human review instead of being sent immediately."
+    )
+
     # --- Outreach agent (packages/agents/outreach_*) ---
     outreach_model: str = Field(
         default="gpt-4o-mini",
@@ -143,11 +192,6 @@ class AppConfig(BaseSettings):
         gt=0,
         le=4096,
         description="Max tokens for outbound email generation",
-    )
-    max_emails_per_lead: int = Field(
-        default=5,
-        ge=1,
-        description="Cap per lead; also gates campaign_leads.emails_sent eligibility",
     )
     max_words_per_email: int = Field(
         default=200,
@@ -166,6 +210,36 @@ class AppConfig(BaseSettings):
         default="\n\nIf you'd prefer not to hear from us, reply with STOP and we will remove you.",
         description="Appended to outbound body when no opt-out wording detected",
     )
+
+    # Deployment
+    cors_origins: str = Field(
+        default="http://localhost:3000,http://localhost:3001,http://localhost:3002",
+        description="Comma-separated allowed CORS origins",
+    )
+    webhook_secret: str | None = Field(
+        default=None,
+        validation_alias="WEBHOOK_SECRET",
+        description="Shared secret for validating incoming webhook requests (optional for local dev)",
+    )
+
+    # Multi-key helpers: split comma-separated values into lists
+    @property
+    def groq_api_keys(self) -> list[str]:
+        if not self.groq_api_key:
+            return []
+        return [k.strip() for k in self.groq_api_key.split(",") if k.strip()]
+
+    @property
+    def cerebras_api_keys(self) -> list[str]:
+        if not self.cerebras_api_key:
+            return []
+        return [k.strip() for k in self.cerebras_api_key.split(",") if k.strip()]
+
+    @property
+    def openrouter_api_keys(self) -> list[str]:
+        if not self.openrouter_api_key:
+            return []
+        return [k.strip() for k in self.openrouter_api_key.split(",") if k.strip()]
 
     # Convenient aliases
     @property

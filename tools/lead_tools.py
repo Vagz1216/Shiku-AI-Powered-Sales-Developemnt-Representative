@@ -14,18 +14,18 @@ from schema import LeadOut
 
 
 @function_tool
-def get_leads_tool(email_cap: int = 5) -> Dict[str, Any]:
+def get_leads_tool(campaign_id: Optional[int] = None, max_leads: Optional[int] = None, order_by: str = 'newest_first') -> Dict[str, Any]:
     """Get leads eligible for outreach.
     
     Args:
-        email_cap: Maximum number of emails sent to include lead (default: 5)
+        campaign_id: Optional campaign ID to filter leads
+        max_leads: Optional maximum number of leads to return
+        order_by: Order to select leads ('newest_first', 'oldest_first', 'random')
         
     Returns:
         Dict with success status, lead data, and error if any
     """
-    if not isinstance(email_cap, int) or email_cap <= 0:
-        return {"success": False, "data": None, "error": "email_cap must be a positive integer"}
-    res = lead_service.get_leads(email_cap=email_cap)
+    res = lead_service.get_leads(campaign_id=campaign_id, max_leads=max_leads, order_by=order_by)
     if not res.get("success"):
         return res
     raw = res.get("data") or []
@@ -105,6 +105,18 @@ def log_event_tool(event_type: str, payload: Optional[str] = None, metadata: Opt
     return lead_service.log_event(event_type=event_type, payload=payload, metadata=metadata)
 
 
+def fetch_lead_info(lead_id: Optional[int] = None) -> Dict[str, Any]:
+    """Internal function to get a specific lead by ID or a random lead."""
+    result = lead_service.get_lead(lead_id=lead_id)
+    if result is None:
+        return {"success": False, "data": None, "error": "Lead not found"}
+    
+    try:
+        lead_out = LeadOut(**result)
+        return {"success": True, "data": lead_out.model_dump(), "error": None}
+    except Exception as e:
+        return {"success": False, "data": None, "error": f"Validation error: {str(e)}"}
+
 @function_tool
 def get_lead_tool(lead_id: Optional[int] = None) -> Dict[str, Any]:
     """Get a specific lead by ID or a random lead.
@@ -115,12 +127,4 @@ def get_lead_tool(lead_id: Optional[int] = None) -> Dict[str, Any]:
     Returns:
         Dict with success status, lead data (name and email), and error if any
     """
-    result = lead_service.get_lead(lead_id=lead_id)
-    if result is None:
-        return {"success": False, "data": None, "error": "Lead not found"}
-    
-    try:
-        lead_out = LeadOut(**result)
-        return {"success": True, "data": lead_out.model_dump(), "error": None}
-    except Exception as e:
-        return {"success": False, "data": None, "error": f"Validation error: {str(e)}"}
+    return fetch_lead_info(lead_id)

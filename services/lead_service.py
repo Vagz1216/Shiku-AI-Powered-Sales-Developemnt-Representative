@@ -13,20 +13,35 @@ def _now_iso():
 class DBLeadProvider(LeadProvider):
     """Implementation of LeadProvider using SQLite/Aurora DB."""
     
-    def get_leads(self, email_cap: int = 5) -> Dict[str, Any]:
+    def get_leads(self, campaign_id: Optional[int] = None, max_leads: Optional[int] = None, order_by: str = 'newest_first') -> Dict[str, Any]:
         conn = get_conn()
-        cur = conn.execute(
-            """
-            SELECT l.name, l.email FROM leads l
+        query = """
+            SELECT l.id, l.name, l.email, l.company, l.industry, l.pain_points FROM leads l
             JOIN campaign_leads cl ON cl.lead_id = l.id
             JOIN campaigns c ON c.id = cl.campaign_id
             WHERE l.email_opt_out = 0
               AND c.status = 'ACTIVE'
-              AND cl.emails_sent < ?
-            GROUP BY l.id
-            """,
-            (email_cap,)
-        )
+              AND cl.emails_sent < c.max_emails_per_lead
+        """
+        params = []
+        if campaign_id is not None:
+            query += " AND c.id = ?"
+            params.append(campaign_id)
+        
+        query += " GROUP BY l.id"
+        
+        if order_by == 'newest_first':
+            query += " ORDER BY l.created_at DESC"
+        elif order_by == 'oldest_first':
+            query += " ORDER BY l.created_at ASC"
+        elif order_by == 'random':
+            query += " ORDER BY RANDOM()"
+            
+        if max_leads is not None:
+            query += " LIMIT ?"
+            params.append(max_leads)
+            
+        cur = conn.execute(query, tuple(params))
         rows = cur.fetchall()
         leads = [dict_from_row(r) for r in rows]
         filtered = []
@@ -34,8 +49,12 @@ class DBLeadProvider(LeadProvider):
             if not l or not isinstance(l, dict):
                 continue
             filtered.append({
+                "id": l.get("id"),
                 "name": l.get("name"),
                 "email": l.get("email"),
+                "company": l.get("company"),
+                "industry": l.get("industry"),
+                "pain_points": l.get("pain_points"),
             })
         return {"success": True, "data": filtered, "error": None}
 
@@ -116,9 +135,9 @@ class DBLeadProvider(LeadProvider):
     def get_lead(self, lead_id: Optional[int] = None) -> Optional[dict]:
         conn = get_conn()
         if lead_id:
-            cur = conn.execute("SELECT name, email FROM leads WHERE id = ?", (lead_id,))
+            cur = conn.execute("SELECT id, name, email, company, industry, pain_points FROM leads WHERE id = ?", (lead_id,))
         else:
-            cur = conn.execute("SELECT name, email FROM leads ORDER BY RANDOM() LIMIT 1")
+            cur = conn.execute("SELECT id, name, email, company, industry, pain_points FROM leads ORDER BY RANDOM() LIMIT 1")
         row = cur.fetchone()
         return dict_from_row(row)
 
@@ -126,7 +145,7 @@ class DBLeadProvider(LeadProvider):
 class CRMLeadProvider(LeadProvider):
     """Skeleton implementation for fetching leads from an external CRM like HubSpot."""
     
-    def get_leads(self, email_cap: int = 5) -> Dict[str, Any]:
+    def get_leads(self, email_cap: int = 5, campaign_id: Optional[int] = None, max_leads: Optional[int] = None, order_by: str = 'newest_first') -> Dict[str, Any]:
         # TODO: Implement API call to CRM (e.g. requests.get('https://api.hubapi.com/...'))
         return {"success": True, "data": [], "error": "CRM provider not fully implemented yet"}
 
@@ -143,7 +162,14 @@ class CRMLeadProvider(LeadProvider):
         return {"success": True, "data": {"event_id": 0}, "error": None}
 
     def get_lead(self, lead_id: Optional[int] = None) -> Optional[dict]:
-        return {"name": "CRM Dummy Lead", "email": "dummy@crm.com"}
+        return {
+            "id": lead_id or 999,
+            "name": "CRM Dummy Lead", 
+            "email": "dummy@crm.com",
+            "company": "CRM Corp",
+            "industry": "Software",
+            "pain_points": "Legacy CRM migration"
+        }
 
 
 # Factory function to provide the right implementation based on environment
@@ -159,8 +185,8 @@ def get_lead_provider() -> LeadProvider:
 # Backwards compatibility layer to avoid breaking existing imports right away
 _provider = get_lead_provider()
 
-def get_leads(email_cap: int = 5) -> Dict[str, Any]:
-    return _provider.get_leads(email_cap)
+def get_leads(campaign_id: Optional[int] = None, max_leads: Optional[int] = None, order_by: str = 'newest_first') -> Dict[str, Any]:
+    return _provider.get_leads(campaign_id, max_leads, order_by)
 
 def update_lead_touch(lead_id: int, campaign_id: int) -> Dict[str, Any]:
     return _provider.update_lead_touch(lead_id, campaign_id)

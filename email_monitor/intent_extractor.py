@@ -50,7 +50,16 @@ Provide a chain of thought rationale explaining your reasoning before giving the
         context = f"Subject: {subject}\nContent: {email_content}"
         
         try:
-            result = await Runner.run(self.agent, context)
+            from utils.model_fallback import run_agent_with_fallback
+            
+            result, provider = await run_agent_with_fallback(
+                name="EmailIntentExtractor",
+                instructions=self.agent.instructions,
+                prompt=context,
+                output_type=EmailIntent,
+                temperature=settings.intent_temperature,
+                max_tokens=settings.intent_max_tokens
+            )
             return result.final_output
         except Exception as e:
             logger.error(f"Failed to extract intent: {e}")

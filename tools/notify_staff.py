@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 @function_tool
-def notify_staff_about_meeting(
+async def notify_staff_about_meeting(
     staff_email: str,
     client_email: str, 
     meeting_details: str  # JSON string of MeetingDetails object
@@ -29,38 +29,53 @@ def notify_staff_about_meeting(
         SendEmailResult with success status
     """
     try:
-        details_dict = json.loads(meeting_details)
-        meeting = MeetingDetails(**details_dict)
-        
-        # Create staff notification email
-        staff_subject = f"Meeting Scheduled: {meeting.subject}"
+        try:
+            details_dict = json.loads(meeting_details)
+            meeting = MeetingDetails(**details_dict)
+            
+            subject = meeting.subject
+            start_time = meeting.start_time
+            duration = meeting.duration_minutes
+            description = meeting.description
+            summary = meeting.conversation_summary
+        except Exception as parse_error:
+            logger.warning(f"Failed to parse MeetingDetails JSON exactly, falling back to raw text: {parse_error}")
+            subject = "New Meeting Scheduled"
+            start_time = "Unknown"
+            duration = 30
+            description = "See conversation context"
+            summary = meeting_details
+
+        staff_subject = f"ACTION REQUIRED: Schedule Meeting - {subject}"
         
         staff_body = f"""Hi there,
 
-A meeting has been automatically scheduled with a client. Here are the details:
+A client has requested a meeting. Please CREATE a Google Calendar invite with the details below.
 
-CLIENT: {client_email}
-MEETING: {meeting.subject}
-TIME: {meeting.start_time}
-DURATION: {meeting.duration_minutes} minutes
-AGENDA: {meeting.description}
+CLIENT EMAIL: {client_email}
+MEETING TITLE: {subject}
+PROPOSED TIME: {start_time}
+DURATION: {duration} minutes
+AGENDA: {description}
 
 CONVERSATION CONTEXT:
-{meeting.conversation_summary}
+{summary}
 
-The client has been sent a calendar invitation. Please review your calendar and prepare for the meeting.
-
-If you need to reschedule or have any questions, please contact the client directly.
+ACTION NEEDED:
+1. Create a Google Calendar event with the details above
+2. Add {client_email} as an attendee (send invitation)
+3. Include a Google Meet link for the call
+4. If the proposed time doesn't work, reach out to the client to reschedule
 
 Best regards,
-Team Coordination"""
+SDR Automation System"""
 
-        # Send notification to staff
-        result = send_plain_email(
+        result = await send_plain_email(
             email=staff_email,
             name="Team Member",
             subject=staff_subject,
-            body=staff_body
+            body=staff_body,
+            internal=True,
         )
         
         if result.ok:

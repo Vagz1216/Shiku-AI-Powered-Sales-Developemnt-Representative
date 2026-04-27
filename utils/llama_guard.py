@@ -47,8 +47,8 @@ Provide a chain of thought rationale, then output whether the email is safe (tru
             max_tokens=300
         )
         
-        logger.info(f"Llama Guard check completed via {provider}. Safe: {result.is_safe}")
-        return result
+        logger.info(f"Llama Guard check completed via {provider}. Safe: {result.final_output.is_safe}")
+        return result.final_output
         
     except Exception as e:
         logger.error(f"Llama Guard check failed: {e}")

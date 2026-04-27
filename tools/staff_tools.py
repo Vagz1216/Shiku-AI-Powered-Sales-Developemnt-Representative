@@ -14,16 +14,17 @@ from schema import StaffOut
 
 
 @function_tool
-def get_staff_tool(staff_id: Optional[int] = None) -> Dict[str, Any]:
+def get_staff_tool(staff_id: Optional[int] = None, exclude_email: Optional[str] = None) -> Dict[str, Any]:
     """Get a specific staff member by ID or a random staff member.
     
     Args:
         staff_id: Optional ID of the staff member to get. If None, returns a random staff member.
+        exclude_email: Optional email to exclude from random selection (e.g. the client's email to avoid self-notification).
         
     Returns:
         Dict with success status, staff data (name, email, timezone, availability), and error if any
     """
-    result = staff_service.get_staff(staff_id=staff_id)
+    result = staff_service.get_staff(staff_id=staff_id, exclude_email=exclude_email)
     if result is None:
         return {"success": False, "data": None, "error": "Staff member not found"}
     

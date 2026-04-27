@@ -4,7 +4,7 @@ import logging
 from datetime import datetime, timedelta
 
 from config.logging import setup_logging
-from agents import Agent, ModelSettings, Runner, function_tool, set_default_openai_key
+from agents import function_tool, set_default_openai_key
 from config import settings
 from schema import MeetingDetails
 
@@ -18,53 +18,63 @@ if settings.openai_api_key:
 
 
 @function_tool
-async def generate_meeting_details(email_context: str, sender_email: str, staff_availability: str = "", staff_timezone: str = "UTC") -> MeetingDetails:
+async def generate_meeting_details(email_context: str, sender_email: str, staff_email: str = "", staff_availability: str = "", staff_timezone: str = "UTC", meeting_delay_days: int = 1) -> MeetingDetails:
     """Generate structured meeting details from email context.
     
     Args:
         email_context: The email content and conversation history
         sender_email: Email address of the sender
+        staff_email: Email address of the staff member
         staff_availability: Staff member's availability in JSON string format
         staff_timezone: Staff member's timezone
+        meeting_delay_days: Number of days to delay before scheduling
         
     Returns:
         MeetingDetails with subject, start_time, duration_minutes, description
     """
     
-    # Create agent for meeting details generation
-    agent = Agent(
-        name="MeetingDetailsGenerator",
-        instructions=f"""
-You are a meeting coordinator. Generate meeting details from email context.
+    now = datetime.now()
+    start_date = now + timedelta(days=meeting_delay_days)
+    # Skip weekends
+    while start_date.weekday() >= 5:
+        start_date += timedelta(days=1)
 
-TODAY'S DATE: {datetime.now().strftime('%Y-%m-%d')}
+    instructions = f"""
+You are a meeting coordinator. Propose a meeting time based on the staff member's availability.
+
+TODAY'S DATE: {now.strftime('%Y-%m-%d')}
+EARLIEST MEETING DATE: {start_date.strftime('%Y-%m-%d')} ({start_date.strftime('%A')})
+STAFF EMAIL: {staff_email}
 STAFF TIMEZONE: {staff_timezone}
 STAFF AVAILABILITY: {staff_availability}
 
-Generate professional meeting details:
-- Subject: Professional meeting title with company name
-- Start Time: Mathematically align the proposed meeting time with the provided STAFF AVAILABILITY and STAFF TIMEZONE. You must ONLY pick a time slot that strictly fits within the staff's specified weekly hours. Format: YYYY-MM-DD HH:MM
-- Duration: 15 min (quick questions), 30 min (general), 60 min (demos/detailed). The duration must fit within the chosen availability block.
-- Description: Brief context from email conversation
-- Conversation Summary: Concise 2-3 sentence summary of email thread for staff context
+Rules:
+- Subject: Professional meeting title including the client's company name
+- Start Time: Pick a slot on or after {start_date.strftime('%Y-%m-%d')} that fits within the STAFF AVAILABILITY hours. Skip weekends. Format: YYYY-MM-DD HH:MM
+- Duration: 30 min (general) or 60 min (demos/detailed discussion)
+- Description: Brief context from the email conversation
+- Conversation Summary: 2-3 sentence summary of the email thread for the staff member
+- Rationale: Explain why you picked this slot
 
-Provide a chain of thought rationale explaining how you aligned the proposed time with the staff's exact availability JSON and timezone before returning the final meeting details.
-""",
-        model_settings=ModelSettings(
-            model=settings.response_model,
-            temperature=0.3,
-            max_tokens=400
-        ),
-        output_type=MeetingDetails
-    )
+Do NOT call any external tools. Just reason from the availability data provided.
+"""
     
-    # Extract company name from email
     company_name = sender_email.split('@')[1].split('.')[0].title() if '@' in sender_email else "Client"
     
     try:
-        result = await Runner.run(agent, email_context)
+        from utils.model_fallback import run_agent_with_fallback
+        
+        result, provider = await run_agent_with_fallback(
+            name="MeetingDetailsGenerator",
+            instructions=instructions,
+            prompt=email_context,
+            output_type=MeetingDetails,
+            temperature=0.3,
+            max_tokens=600,
+        )
+        
         meeting_details = result.final_output
-        logger.info(f"Generated meeting details for {sender_email}: {meeting_details.subject}")
+        logger.info(f"Generated meeting details for {sender_email} via {provider}: {meeting_details.subject}")
         return meeting_details
     except Exception as e:
         logger.error(f"Error generating meeting details: {e}")

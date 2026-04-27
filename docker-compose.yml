@@ -12,4 +12,6 @@ services:
       - AGENTMAIL_API_KEY=${AGENTMAIL_API_KEY}
     volumes:
       - ./data:/app/data
+      - ./db:/app/db
+      - ./logs:/app/logs
     restart: unless-stopped

@@ -41,7 +41,7 @@ class ResponseEvaluation(BaseModel):
 
 class MeetingDetails(BaseModel):
     """Structured meeting details for calendar event creation."""
-    rationale: str = Field(description="Chain of thought explaining the reasoning behind the selected meeting details.")
+    rationale: str = Field(default="", description="Chain of thought explaining the reasoning behind the selected meeting details.")
     subject: str = Field(description="Professional meeting subject line")
     start_time: str = Field(description="Meeting start time in YYYY-MM-DD HH:MM format")
     duration_minutes: int = Field(description="Duration of the meeting in minutes")

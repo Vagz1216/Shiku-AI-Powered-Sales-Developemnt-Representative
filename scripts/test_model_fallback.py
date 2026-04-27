@@ -22,14 +22,14 @@ async def main():
     
     try:
         print(f"Attempting to run agent with fallback...")
-        result = await run_agent_with_fallback(
+        result, provider = await run_agent_with_fallback(
             name="TestFallbackAgent",
             instructions=instructions,
             prompt=prompt,
             temperature=0.7,
             max_tokens=20
         )
-        print(f"\n✅ Success! Result: {result}")
+        print(f"\n✅ Success! Result: {result.final_output} (via {provider})")
         
     except Exception as e:
         print(f"\n❌ Failed: {e}")

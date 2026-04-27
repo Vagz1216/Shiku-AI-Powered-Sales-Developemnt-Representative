@@ -66,7 +66,7 @@ Do not use any placeholder text like [Your Name] or [Company]. Write complete, r
             max_tokens=1000
         )
         logger.info(f"Professional email generated using {provider}")
-        return result
+        return result.final_output
     except Exception as e:
         logger.error(f"Professional email generation failed: {e}")
         return OutreachEmailDraft(
@@ -103,7 +103,7 @@ Do not use any placeholder text like [Your Name] or [Company]. Write complete, r
             max_tokens=1000
         )
         logger.info(f"Engaging email generated using {provider}")
-        return result
+        return result.final_output
     except Exception as e:
         logger.error(f"Engaging email generation failed: {e}")
         return OutreachEmailDraft(
@@ -140,7 +140,7 @@ Do not use any placeholder text like [Your Name] or [Company]. Write complete, r
             max_tokens=800
         )
         logger.info(f"Concise email generated using {provider}")
-        return result
+        return result.final_output
     except Exception as e:
         logger.error(f"Concise email generation failed: {e}")
         return OutreachEmailDraft(

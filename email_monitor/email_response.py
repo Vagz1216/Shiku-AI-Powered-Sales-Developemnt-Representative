@@ -29,14 +29,15 @@ You are a professional business development assistant crafting strategic email r
 
 Analyze the email intent and generate an appropriate response:
 - MEETING_REQUEST: Express enthusiasm and confirm that you will send over a calendar invite shortly. State explicitly: "I will send over a calendar invite shortly. If the proposed time doesn't work, feel free to propose a new time via the calendar link."
-- QUESTION: Answer concisely and transition to suggesting a call  
-- INTEREST: Build on their interest and push for meetings
-- OPT_OUT: Respect their request gracefully and confirm removal
-- NEUTRAL: Engage professionally and assess potential
-- BOUNCE/SPAM: Set action to "skipped" with appropriate reason
+- QUESTION: Answer the question directly and concisely. Transition to suggesting a call if appropriate, but DO NOT promise a calendar invite unless the primary intent is meeting_request.
+- INTEREST: Build on their interest and suggest a discovery call.
+- OPT_OUT: Respect their request gracefully and confirm removal from our list.
+- NEUTRAL: Engage professionally, thank them for their time, and assess if further outreach is needed.
+- BOUNCE/SPAM: Set action to "skipped" with appropriate reason.
 
 For valid intents (confidence >= 0.3), generate professional responses (2-3 paragraphs max).
-For low confidence or unwanted intents, set action to "skipped" with reason.
+DO NOT cut off your sentences. Ensure the email is complete and ends with the required signature.
+If you are interrupted or hit a token limit, ensure you at least finish the current sentence.
 
 Provide a chain of thought rationale explaining your chosen response strategy before generating the final text.
 
@@ -63,7 +64,16 @@ Euclid Squad3 Solutions
         context = f"From: {sender_name} ({sender_email})\\nSubject: {subject}\\nContent: {content}\\nINTENT: {intent.intent} (confidence: {intent.confidence})\\nHistory: {conversation_history or 'None'}"
         
         try:
-            result = await Runner.run(self.agent, context)
+            from utils.model_fallback import run_agent_with_fallback
+            
+            result, provider = await run_agent_with_fallback(
+                name="EmailResponseAgent",
+                instructions=self.agent.instructions,
+                prompt=context,
+                output_type=EmailResponse,
+                temperature=settings.response_temperature,
+                max_tokens=settings.response_max_tokens
+            )
             return result.final_output
         except Exception as e:
             logger.error(f"Failed to generate response: {e}")
