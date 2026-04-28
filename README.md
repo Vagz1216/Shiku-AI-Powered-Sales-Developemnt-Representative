@@ -197,5 +197,3 @@ Commit **`terraform/*/.terraform.lock.hcl`** so provider versions stay consisten
 git fetch origin
 git status
 ```
-
-You want: `Your branch is up to date with 'origin/main'` (or your branch name). If you are ahead, push; if behind, `git pull`.
