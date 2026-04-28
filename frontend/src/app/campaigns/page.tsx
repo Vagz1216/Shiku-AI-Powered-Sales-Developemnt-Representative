@@ -177,7 +177,19 @@ export default function CampaignsPage() {
         body: JSON.stringify(payload)
       })
 
-      if (!res.ok) throw new Error('Failed to save campaign')
+      if (!res.ok) {
+        const text = await res.text()
+        let detail = text.slice(0, 500)
+        try {
+          const j = JSON.parse(text)
+          if (j?.detail != null) {
+            detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)
+          }
+        } catch {
+          /* use raw */
+        }
+        throw new Error(`Failed to save campaign (${res.status}): ${detail}`)
+      }
       
       await loadCampaigns()
       setIsModalOpen(false)

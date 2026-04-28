@@ -101,7 +101,7 @@ def create_campaign(campaign: CampaignCreate) -> Optional[CampaignInfo]:
                 campaign.meeting_delay_days,
                 campaign.max_leads_per_campaign,
                 campaign.lead_selection_order,
-                1 if campaign.auto_approve_drafts else 0,
+                campaign.auto_approve_drafts,
                 campaign.max_emails_per_lead,
             )
             if using_aurora():
@@ -158,17 +158,28 @@ def update_campaign(campaign_id: int, updates: CampaignUpdate) -> Optional[Campa
             return get_campaign_by_id(campaign_id)
 
         for key, value in update_dict.items():
-            if key == "auto_approve_drafts":
-                value = 1 if value else 0
             update_fields.append(f"{key} = ?")
             update_values.append(value)
 
         update_values.append(campaign_id)
 
         with get_conn() as conn:
-            query = f"UPDATE campaigns SET {', '.join(update_fields)} WHERE id = ?"
-            cur = conn.execute(query, tuple(update_values))
+            set_clause = ", ".join(update_fields)
+            if using_aurora():
+                # Data API often does not populate numberOfRecordsUpdated for UPDATE; use RETURNING.
+                cols_sql = ", ".join(_CAMP_COLS)
+                cur = conn.execute(
+                    f"UPDATE campaigns SET {set_clause} WHERE id = ? RETURNING {cols_sql}",
+                    tuple(update_values),
+                )
+                row = cur.fetchone()
+                t = _camp_tuple(row)
+                return _to_campaign_info(t) if t else None
 
+            cur = conn.execute(
+                f"UPDATE campaigns SET {set_clause} WHERE id = ?",
+                tuple(update_values),
+            )
             if cur.rowcount > 0:
                 return get_campaign_by_id(campaign_id)
             return None

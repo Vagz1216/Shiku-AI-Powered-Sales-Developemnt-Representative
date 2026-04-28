@@ -175,6 +175,8 @@ async def list_campaigns(user: dict = Depends(get_current_user), active_only: bo
         else:
             campaigns = get_all_campaigns()
         return {"campaigns": [c.dict() for c in campaigns]}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to list campaigns: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -187,6 +189,8 @@ async def create_new_campaign(campaign: CampaignCreate, user: dict = Depends(get
         if not new_campaign:
             raise HTTPException(status_code=500, detail="Failed to create campaign")
         return {"status": "success", "campaign": new_campaign.dict()}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to create campaign: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -199,6 +203,8 @@ async def update_existing_campaign(campaign_id: int, updates: CampaignUpdate, us
         if not updated_campaign:
             raise HTTPException(status_code=404, detail="Campaign not found or update failed")
         return {"status": "success", "campaign": updated_campaign.dict()}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to update campaign {campaign_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -211,6 +217,8 @@ async def delete_existing_campaign(campaign_id: int, user: dict = Depends(get_cu
         if not success:
             raise HTTPException(status_code=404, detail="Campaign not found or deletion failed")
         return {"status": "success", "message": f"Campaign {campaign_id} deleted successfully"}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to delete campaign {campaign_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))

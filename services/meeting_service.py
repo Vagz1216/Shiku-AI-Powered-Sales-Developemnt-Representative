@@ -1,7 +1,7 @@
 from typing import Dict, Any, Optional
 import datetime
 import json
-from utils.db_connection import get_conn
+from utils.db_connection import get_conn, sql_bool_true
 from services import lead_service
 
 
@@ -34,7 +34,10 @@ def schedule_meeting(lead_id: int, staff_id: int, start_time: str, meet_link: Op
             # Update lead status
             conn.execute("UPDATE leads SET status = 'MEETING_BOOKED' WHERE id = ?", (lead_id,))
             # Mark meeting_booked on any campaign_leads rows
-            conn.execute("UPDATE campaign_leads SET meeting_booked = 1 WHERE lead_id = ?", (lead_id,))
+            conn.execute(
+                f"UPDATE campaign_leads SET meeting_booked = {sql_bool_true()} WHERE lead_id = ?",
+                (lead_id,),
+            )
             # log event (store JSON payload)
             conn.execute(
                 "INSERT INTO events (type, payload) VALUES (?, ?)",

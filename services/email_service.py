@@ -1,6 +1,6 @@
 from typing import Dict, Any, List
 import datetime
-from utils.db_connection import get_conn, dict_from_row
+from utils.db_connection import get_conn, dict_from_row, sql_order_by_datetime, sql_bool_true, sql_bool_false
 from services import lead_service
 
 
@@ -28,9 +28,10 @@ def save_email(lead_id: int, campaign_id: int, subject: str, body: str) -> Dict[
             if existing:
                 return {"success": True, "data": {"email_id": existing['id'], "idempotent": True}, "error": None}
 
+            proc = sql_bool_true()
             cur = conn.execute(
-                "INSERT INTO email_messages (lead_id, campaign_id, direction, subject, body, status, processed, created_at) VALUES (?, ?, 'outbound', ?, ?, ?, 1, ?)",
-                (lead_id, campaign_id, subject, body, 'sent', _now_iso()),
+                f"INSERT INTO email_messages (lead_id, campaign_id, direction, subject, body, status, processed, created_at) VALUES (?, ?, 'outbound', ?, ?, ?, {proc}, ?)",
+                (lead_id, campaign_id, subject, body, "sent", _now_iso()),
             )
             email_id = cur.lastrowid
             # update lead touch and campaign_leads
@@ -55,8 +56,10 @@ def save_email(lead_id: int, campaign_id: int, subject: str, body: str) -> Dict[
 def fetch_inbound_messages() -> Dict[str, Any]:
     conn = get_conn()
     try:
+        ob = sql_order_by_datetime("created_at")
+        pf = sql_bool_false()
         cur = conn.execute(
-            "SELECT * FROM email_messages WHERE direction = 'inbound' AND processed = 0 ORDER BY datetime(created_at) ASC"
+            f"SELECT * FROM email_messages WHERE direction = 'inbound' AND processed = {pf} ORDER BY {ob} ASC"
         )
         rows = cur.fetchall()
         messages = [dict_from_row(r) for r in rows]
@@ -71,7 +74,10 @@ def mark_processed(message_id: int, intent: str) -> Dict[str, Any]:
     conn = get_conn()
     try:
         with conn:
-            conn.execute("UPDATE email_messages SET processed = 1, intent = ? WHERE id = ?", (intent, message_id))
+            conn.execute(
+                f"UPDATE email_messages SET processed = {sql_bool_true()}, intent = ? WHERE id = ?",
+                (intent, message_id),
+            )
             # Optionally update last_inbound_at on the lead
             cur = conn.execute("SELECT lead_id FROM email_messages WHERE id = ?", (message_id,))
             row = cur.fetchone()

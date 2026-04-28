@@ -1,19 +1,23 @@
-# Shiku: AI-Powered Sales Development Representative (SDR) Platform
+# Shiku: Enterprise AI-Powered Sales Development Representative (SDR) Platform
 
-Shiku is an enterprise-grade, AI-assisted sales outreach platform. It runs database-backed email campaigns, intelligently monitors inbound replies, classifies lead intent, and automatically coordinates follow-up meetings based on real staff availability. 
+Shiku is a production-grade, AI-assisted sales outreach platform designed to solve a critical business bottleneck: scaling personalized outbound sales without sacrificing quality or overwhelming human sales teams. By intelligently automating database-backed email campaigns, monitoring inbound replies, extracting lead intent, and coordinating follow-up meetings based on real staff availability, Shiku allows sales teams to focus strictly on high-value human interactions.
 
-This repository has been significantly re-architected from its prototype phase to incorporate robust data layers, structured AI outputs, and enterprise-grade security guardrails.
+This repository has been architected from the ground up to demonstrate deep domain understanding, strict AI framing, and enterprise-grade engineering practices. It transitions a conceptual AI workflow into a robust, deployable system with strict data contracts, observability, and security guardrails.
 
-## 🚀 Key Features & Upgrades
+## 🎯 Problem Statement & Scope
+**The Problem:** Traditional SDR work is highly manual, repetitive, and prone to poor personalization. AI solutions often struggle with hallucinations, lack of context, and inability to integrate safely with real-world databases and calendars.
+**The Scope:** Shiku strictly bounds its AI agents to specific, highly structured tasks (drafting, reviewing, intent extraction). It enforces constraints through strict schema validation and isolates external system mutations (like database writes or calendar bookings) behind deterministic, non-AI control layers. 
+**Trade-offs:** We deliberately chose an Orchestrator-Worker multi-agent pattern over a single monolithic LLM prompt to ensure reliability and debuggability, trading slight latency for significantly higher output quality and safety.
 
-This project implements the "Alex Architecture" principles, focusing on reliability, security, and strict data contracts:
+## 🚀 Key Features & Engineering Practices
 
-*   **Orchestrator-Worker Pattern**: Separation of concerns between marketing orchestration, drafting, and reviewing.
-*   **Data Access Layer (Adapter Pattern)**: Seamlessly switch between local SQLite and external CRMs via `DATA_SOURCE` environment variables.
-*   **Strict Structured Outputs**: All AI agents are forced to return strict Pydantic JSON schemas and employ Chain of Thought (`rationale` field first) to ensure deterministic outputs.
-*   **Smart Calendar Scheduling**: Re-architected meeting booking to fetch real staff availability from the database and mathematically align proposed times, eliminating AI hallucinations and double-booking.
-*   **Inbound Security Guardrails**: Integrates Llama Guard to validate inbound email webhooks, protecting the system against prompt injection attacks before they reach the core LLM logic.
-*   **AWS & frontend**: Optional deploy to **Aurora Serverless v2 (PostgreSQL)** via RDS Data API, **App Runner** for the API, and a **Next.js** UI exported to **S3 + CloudFront** (see `docs/DEPLOY_AWS.md` and `terraform/README.md`).
+*   **Advanced Orchestration & Control Flow**: Employs an Orchestrator-Worker multi-agent pattern with dynamic routing, robust error handling, and graceful fallbacks.
+*   **Sophisticated Prompting & Model Interaction**: Uses advanced prompt engineering including Chain of Thought (`rationale` field generation before answers) and strictly enforced Pydantic JSON schemas to guarantee deterministic, production-ready outputs.
+*   **Data Access Layer (Adapter Pattern)**: Modular architecture allowing seamless switching between local SQLite (for rapid development) and AWS Aurora Serverless v2 PostgreSQL (for production) via `DATA_SOURCE` environment variables.
+*   **Smart Calendar Scheduling**: Fetches real staff availability from the database and mathematically aligns proposed times, completely eliminating AI hallucinations and double-booking risks.
+*   **Enterprise Security & Guardrails**: Integrates Llama Guard to validate inbound email webhooks, protecting the system against prompt injection attacks and malicious payloads before they reach the core LLM logic.
+*   **Comprehensive Observability & Logging**: Features structured logging across all components, surfacing meaningful context for errors, and ensuring full traceability of multi-agent interactions and system health.
+*   **Production-Ready Deployment**: Fully automated, production-grade deployment pipeline using Terraform (IaC) to AWS (App Runner for API, Aurora PostgreSQL for DB, S3 + CloudFront for Frontend), ensuring environment parity and scalable performance.
 
 ## 🏗️ System Architecture
 

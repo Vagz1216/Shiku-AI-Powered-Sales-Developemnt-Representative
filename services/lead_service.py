@@ -1,7 +1,7 @@
 import os
 from typing import Dict, Any, Optional
 import datetime
-from utils.db_connection import get_conn, dict_from_row
+from utils.db_connection import get_conn, dict_from_row, sql_order_by_datetime, sql_random_order, using_aurora
 from .data_provider import LeadProvider
 from config.settings import settings
 
@@ -15,7 +15,26 @@ class DBLeadProvider(LeadProvider):
     
     def get_leads(self, campaign_id: Optional[int] = None, max_leads: Optional[int] = None, order_by: str = 'newest_first') -> Dict[str, Any]:
         conn = get_conn()
-        query = """
+        if using_aurora():
+            select_sql = """
+            SELECT l.id, l.name, l.email, l.company, l.industry, l.pain_points, l.status,
+                   l.touch_count, l.created_at,
+                   MAX(cl.emails_sent) AS emails_sent,
+                   bool_or(cl.responded) AS responded,
+                   bool_or(cl.meeting_booked) AS meeting_booked
+            FROM leads l
+            JOIN campaign_leads cl ON cl.lead_id = l.id
+            JOIN campaigns c ON c.id = cl.campaign_id
+            WHERE l.email_opt_out = FALSE
+              AND c.status = 'ACTIVE'
+              AND cl.emails_sent < c.max_emails_per_lead
+            """
+            group_sql = (
+                "GROUP BY l.id, l.name, l.email, l.company, l.industry, l.pain_points, l.status, "
+                "l.touch_count, l.created_at"
+            )
+        else:
+            select_sql = """
             SELECT l.id, l.name, l.email, l.company, l.industry, l.pain_points, l.status,
                    l.touch_count, cl.emails_sent, cl.responded, cl.meeting_booked
             FROM leads l
@@ -24,20 +43,22 @@ class DBLeadProvider(LeadProvider):
             WHERE l.email_opt_out = 0
               AND c.status = 'ACTIVE'
               AND cl.emails_sent < c.max_emails_per_lead
-        """
+            """
+            group_sql = "GROUP BY l.id"
+        query = select_sql
         params = []
         if campaign_id is not None:
             query += " AND c.id = ?"
             params.append(campaign_id)
-        
-        query += " GROUP BY l.id"
+
+        query += " " + group_sql
         
         if order_by == 'newest_first':
             query += " ORDER BY l.created_at DESC"
         elif order_by == 'oldest_first':
             query += " ORDER BY l.created_at ASC"
         elif order_by == 'random':
-            query += " ORDER BY RANDOM()"
+            query += f" ORDER BY {sql_random_order()}"
         elif order_by == 'highest_score':
             # "Score" proxy: prioritize least-touched leads first, then newest.
             query += " ORDER BY l.touch_count ASC, l.created_at DESC"
@@ -101,9 +122,10 @@ class DBLeadProvider(LeadProvider):
         if not lead_id:
             return {"success": False, "data": None, "error": "lead_id required"}
         conn = get_conn()
+        ob = sql_order_by_datetime("created_at")
         cur = conn.execute(
-            "SELECT * FROM email_messages WHERE lead_id = ? ORDER BY datetime(created_at) ASC",
-            (lead_id,)
+            f"SELECT * FROM email_messages WHERE lead_id = ? ORDER BY {ob} ASC",
+            (lead_id,),
         )
         rows = cur.fetchall()
         messages = [dict_from_row(r) for r in rows]
@@ -147,7 +169,9 @@ class DBLeadProvider(LeadProvider):
         if lead_id:
             cur = conn.execute("SELECT id, name, email, company, industry, pain_points FROM leads WHERE id = ?", (lead_id,))
         else:
-            cur = conn.execute("SELECT id, name, email, company, industry, pain_points FROM leads ORDER BY RANDOM() LIMIT 1")
+            cur = conn.execute(
+                f"SELECT id, name, email, company, industry, pain_points FROM leads ORDER BY {sql_random_order()} LIMIT 1"
+            )
         row = cur.fetchone()
         return dict_from_row(row)
 

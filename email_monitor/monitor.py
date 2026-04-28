@@ -15,7 +15,7 @@ from .response_evaluator import ResponseEvaluator
 from .email_sender import EmailSenderAgent
 from .security import validate_email_security
 from .data_utils import get_email_metadata
-from utils.db_connection import get_conn
+from utils.db_connection import get_conn, sql_bool_true
 
 # Setup logging
 setup_logging()
@@ -134,10 +134,11 @@ class EmailMonitorSystem:
             import datetime
             now_iso = datetime.datetime.utcnow().isoformat() + "Z"
 
+            bt = sql_bool_true()
             with conn:
                 conn.execute(
-                    "INSERT INTO email_messages (lead_id, direction, subject, body, status, intent, processed) "
-                    "VALUES (?, 'inbound', ?, ?, 'RECEIVED', ?, 1)",
+                    f"INSERT INTO email_messages (lead_id, direction, subject, body, status, intent, processed) "
+                    f"VALUES (?, 'inbound', ?, ?, 'RECEIVED', ?, {bt})",
                     (lead_id, subject, content[:2000], intent),
                 )
                 conn.execute(
@@ -160,7 +161,10 @@ class EmailMonitorSystem:
 
                 if intent == "opt_out":
                     new_status = "OPTED_OUT"
-                    conn.execute("UPDATE leads SET email_opt_out = 1 WHERE id = ?", (lead_id,))
+                    conn.execute(
+                        f"UPDATE leads SET email_opt_out = {bt} WHERE id = ?",
+                        (lead_id,),
+                    )
 
                 if new_status:
                     conn.execute("UPDATE leads SET status = ? WHERE id = ?", (new_status, lead_id))

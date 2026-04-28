@@ -172,6 +172,16 @@ def sql_random_order() -> str:
     return "random()" if _is_aurora() else "RANDOM()"
 
 
+def sql_bool_true() -> str:
+    """SQL literal true: BOOLEAN in PostgreSQL, 1 for SQLite INTEGER-as-bool columns."""
+    return "TRUE" if _is_aurora() else "1"
+
+
+def sql_bool_false() -> str:
+    """SQL literal false: BOOLEAN in PostgreSQL, 0 for SQLite INTEGER-as-bool columns."""
+    return "FALSE" if _is_aurora() else "0"
+
+
 def _ensure_db_dir():
     os.makedirs(DB_DIR, exist_ok=True)
 

@@ -50,6 +50,9 @@ logs/
 data/
 temp/
 
+# Deploy notes — maintain locally / elsewhere until AWS docs are finalized
+docs/
+
 # Terraform variable files (keep *.tfvars.example tracked)
 *.tfvars
 !*.tfvars.example
