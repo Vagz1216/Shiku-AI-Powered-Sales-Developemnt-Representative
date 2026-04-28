@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from schema.outreach import OutreachEmailDraft
 from utils.model_fallback import run_agent_with_fallback
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -25,27 +26,42 @@ class ReviewResponse(BaseModel):
 
 async def run_drafter_agent(campaign_info: Dict[str, Any], lead_info: Dict[str, Any]) -> DraftsResponse:
     """Worker Agent 1: Generates multiple variations of the email."""
-    instructions = "You are an expert SDR copywriter. Generate exactly 3 email drafts based on the provided lead and campaign context."
+    instructions = (
+        "You are an expert SDR copywriter. Generate exactly 3 email drafts based on the provided lead and campaign context. "
+        "Respect sequence stage: first-touch emails should introduce value; follow-up emails should acknowledge prior outreach and add fresh angle/value."
+    )
     prompt = f"""
     Campaign Details:
     - Name: {campaign_info['name']}
     - Value Proposition: {campaign_info['value_proposition']}
+    - CTA: {campaign_info.get('cta', '')}
+    - Preferred Tone: {campaign_info.get('tone', settings.tone)}
+    - Sender Name: {campaign_info.get('sender_name', settings.outreach_sender_name)}
+    - Sender Company: {campaign_info.get('sender_company', settings.outreach_sender_company)}
     
     Lead Details:
     - Name: {lead_info['name']}
     - Company: {lead_info['company']}
     - Industry: {lead_info.get('industry', 'Unknown')}
     - Pain Points: {lead_info.get('pain_points', 'Unknown')}
+    - Total Touch Count: {lead_info.get('touch_count', 0)}
+    - Emails Sent In This Campaign: {lead_info.get('emails_sent', 0)}
+    - Has Responded Before: {bool(lead_info.get('responded', 0))}
     
     Generate exactly 3 drafts:
     1. Professional: Formal business tone, focusing on ROI and specific business benefits.
     2. Engaging: Warm, story-driven, conversational, focusing on relatable business challenges.
     3. Concise: Brief, direct, maximum 4-5 sentences, focusing on quick wins.
     
+    Follow-up sequencing rules:
+    - If Emails Sent In This Campaign is 0: treat as first-touch outreach.
+    - If Emails Sent In This Campaign is 1 or more: treat as follow-up and avoid repeating identical opener/CTA.
+    - For follow-up, include one new angle (e.g., quantified benefit, relevant use case, or pain-point reframing).
+    
     CRITICAL INSTRUCTION:
     - Do NOT use any bracketed placeholders like [Your Name], [Company], [Sender], etc.
-    - Always sign the email as "Alex from Euclid Tech".
-    - If you need to mention our company name in the body, use "Euclid Tech".
+    - Always sign using the provided sender identity.
+    - Use the provided CTA naturally in the email body.
     """
     
     result, provider = await run_agent_with_fallback(
@@ -65,9 +81,14 @@ async def run_reviewer_agent(campaign_info: Dict[str, Any], lead_info: Dict[str,
     instructions = "You are a Senior Marketing Reviewer. Evaluate the email drafts and select the best one. You MUST output your reasoning in the 'rationale' field first."
     prompt = f"""
     Campaign Value Proposition: {campaign_info['value_proposition']}
+    Campaign CTA: {campaign_info.get('cta', '')}
+    Preferred Tone: {campaign_info.get('tone', settings.tone)}
+    Sender Name: {campaign_info.get('sender_name', settings.outreach_sender_name)}
+    Sender Company: {campaign_info.get('sender_company', settings.outreach_sender_company)}
     Lead Name: {lead_info['name']}
     Lead Industry: {lead_info.get('industry', 'Unknown')}
     Lead Pain Points: {lead_info.get('pain_points', 'Unknown')}
+    Emails Sent In Campaign So Far: {lead_info.get('emails_sent', 0)}
     
     Drafts to Evaluate:
     
@@ -85,10 +106,11 @@ async def run_reviewer_agent(campaign_info: Dict[str, Any], lead_info: Dict[str,
     
     Select the BEST draft for this specific lead. Consider their industry and pain points. 
     Ensure the email directly addresses their pain points using the value proposition.
+    Ensure the draft is appropriate for the outreach stage (first-touch vs follow-up).
     
     CRITICAL INSTRUCTION:
     - The final selected body MUST NOT contain any placeholders like [Your Name], [Company], etc.
-    - If the chosen draft has placeholders, replace them with "Alex" and "Euclid Tech" respectively before outputting.
+    - If the chosen draft has placeholders, replace them with the provided sender identity before outputting.
     """
     
     result, provider = await run_agent_with_fallback(

@@ -28,13 +28,18 @@ class IntentExtractorAgent:
 Analyze email content and classify the sender's intent with confidence.
 
 Classify into one of these intents:
-- meeting_request: Explicitly asking to schedule a meeting/call
+- meeting_request: Explicitly asking to schedule a meeting/call for the FIRST TIME (no prior meeting proposal in the conversation)
+- meeting_confirmation: Confirming or accepting a previously proposed meeting time (e.g. "that time works", "see you then", "looking forward to the call")
 - question: Has specific questions about services
 - interest: Expressing interest but no specific questions
 - opt_out: Requesting to be removed or unsubscribed
 - neutral: General inquiry or acknowledgment
 - bounce: Automated bounce/out-of-office message
 - spam: Spam or irrelevant content
+
+IMPORTANT distinction between meeting_request vs meeting_confirmation:
+- meeting_request: The lead is asking to meet for the first time, or no specific time has been proposed yet
+- meeting_confirmation: A meeting time was ALREADY proposed in earlier messages, and the lead is now confirming/accepting it
 
 Provide a chain of thought rationale explaining your reasoning before giving the final intent and confidence score (0.0-1.0).
 """,
@@ -45,8 +50,25 @@ Provide a chain of thought rationale explaining your reasoning before giving the
             output_type=EmailIntent
         )
     
-    async def extract_intent(self, email_content: str, subject: str = "") -> EmailIntent:
-        """Extract intent from email content."""
+    async def extract_intent(self, email_content: str, subject: str = "", sender_email: str = "") -> EmailIntent:
+        """Extract intent from email content.
+        
+        First checks for quick-reply keyword markers (zero-cost fast path).
+        Falls back to LLM classification if no keyword is found.
+        """
+        from utils.quick_replies import detect_quick_reply_keyword
+
+        keyword_intent = detect_quick_reply_keyword(email_content)
+        if not keyword_intent:
+            keyword_intent = detect_quick_reply_keyword(subject)
+        if keyword_intent:
+            logger.info(f"Fast-path intent detected via quick-reply keyword: {keyword_intent}")
+            return EmailIntent(
+                rationale=f"Quick-reply keyword detected in email body/subject, mapping directly to '{keyword_intent}' without LLM call.",
+                intent=keyword_intent,
+                confidence=1.0
+            )
+
         context = f"Subject: {subject}\nContent: {email_content}"
         
         try:

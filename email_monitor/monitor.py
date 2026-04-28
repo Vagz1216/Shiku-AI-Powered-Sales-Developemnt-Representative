@@ -149,7 +149,8 @@ class EmailMonitorSystem:
                 # opt_out is always honoured regardless of send success.
                 if reply_sent:
                     status_map = {
-                        "meeting_request": "MEETING_BOOKED",
+                        "meeting_request": "MEETING_PROPOSED",
+                        "meeting_confirmation": "MEETING_BOOKED",
                         "interest": "WARM",
                         "question": "WARM",
                     }
@@ -168,12 +169,64 @@ class EmailMonitorSystem:
         except Exception as e:
             logger.error(f"Failed to update lead from inbound email: {e}")
 
+    def _lookup_lead_context(self, sender_email: str) -> Optional[Dict[str, Any]]:
+        """Look up lead and associated campaign/staff info for richer UI logging."""
+        try:
+            conn = get_conn()
+            row = conn.execute(
+                "SELECT l.id, l.name, l.company, l.status, l.industry "
+                "FROM leads l WHERE l.email = ?",
+                (sender_email,),
+            ).fetchone()
+            if not row:
+                return None
+            lead = dict(row)
+
+            campaign_row = conn.execute(
+                "SELECT c.id AS campaign_id, c.name AS campaign_name FROM campaign_leads cl "
+                "JOIN campaigns c ON c.id = cl.campaign_id "
+                "WHERE cl.lead_id = ? ORDER BY c.id DESC LIMIT 1",
+                (lead["id"],),
+            ).fetchone()
+            lead["campaign_id"] = campaign_row["campaign_id"] if campaign_row else None
+            lead["campaign_name"] = campaign_row["campaign_name"] if campaign_row else None
+
+            staff_row = conn.execute(
+                "SELECT s.name AS staff_name, s.email AS staff_email "
+                "FROM meetings m JOIN staff s ON s.id = m.staff_id "
+                "WHERE m.lead_id = ? ORDER BY m.id DESC LIMIT 1",
+                (lead["id"],),
+            ).fetchone()
+            lead["staff_name"] = staff_row["staff_name"] if staff_row else None
+            lead["staff_email"] = staff_row["staff_email"] if staff_row else None
+            return lead
+        except Exception as e:
+            logger.debug(f"Lead context lookup failed: {e}")
+            return None
+
     async def process_incoming_email(self, email_data: Dict[str, Any], callback: Optional[Callable[[str, str], Awaitable[None]]] = None) -> EmailActionResult:
         """Complete email processing pipeline with retry logic and meeting scheduling."""
         # Extract all email metadata in one efficient call
         metadata = get_email_metadata(email_data)
         
         if callback: await callback("info", f"Processing email from {metadata['sender_email']}: {metadata['subject']}")
+        
+        # Enrich logs with lead/campaign context
+        lead_ctx = self._lookup_lead_context(metadata['sender_email'])
+        if lead_ctx and lead_ctx.get("campaign_id"):
+            metadata["campaign_id"] = lead_ctx["campaign_id"]
+        if lead_ctx and callback:
+            parts = [f"Lead: {lead_ctx['name'] or 'Unknown'} ({metadata['sender_email']})"]
+            if lead_ctx.get("company"):
+                parts.append(f"Company: {lead_ctx['company']}")
+            if lead_ctx.get("campaign_name"):
+                parts.append(f"Campaign: {lead_ctx['campaign_name']}")
+            if lead_ctx.get("staff_name"):
+                parts.append(f"Assigned SDR: {lead_ctx['staff_name']}")
+            parts.append(f"Status: {lead_ctx.get('status', 'N/A')}")
+            await callback("info", " | ".join(parts))
+        elif callback:
+            await callback("warning", f"No lead record found for {metadata['sender_email']} (external or unknown sender)")
         
         # Create a single trace for the entire email processing pipeline  
         trace_id = gen_trace_id()
@@ -222,7 +275,11 @@ class EmailMonitorSystem:
                 
                 # Step 1: Extract intent
                 if callback: await callback("info", "Extracting email intent...")
-                intent = await self.intent_extractor.extract_intent(metadata['content'], metadata['subject'])
+                intent = await self.intent_extractor.extract_intent(
+                    metadata['content'],
+                    metadata['subject'],
+                    metadata['sender_email'],
+                )
                 msg = f"Extracted Intent: {intent.intent} (confidence: {intent.confidence})"
                 logger.info(msg)
                 if callback: await callback("success", msg)

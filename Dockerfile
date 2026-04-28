@@ -18,7 +18,7 @@ FROM python:3.12-slim AS runtime
 
 ENV PYTHONUNBUFFERED=1 \
     PATH="/app/.venv/bin:$PATH" \
-    PORT=7860
+    PORT=8000
 
 # Create user and workspace
 RUN useradd -m -u 1000 user
@@ -34,5 +34,5 @@ RUN mkdir -p logs data db && chown -R user:user /app
 USER user
 
 # Expose port and run
-EXPOSE 7860
-CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"]
+EXPOSE 8000
+CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

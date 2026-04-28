@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS leads (
     company TEXT,
     industry TEXT,
     pain_points TEXT,
-    status TEXT NOT NULL DEFAULT 'NEW' CHECK(status IN ('NEW','CONTACTED','WARM','QUALIFIED','MEETING_BOOKED','COLD','OPTED_OUT')),
+    status TEXT NOT NULL DEFAULT 'NEW' CHECK(status IN ('NEW','CONTACTED','WARM','QUALIFIED','MEETING_PROPOSED','MEETING_BOOKED','COLD','OPTED_OUT')),
     email_opt_out BOOLEAN NOT NULL DEFAULT FALSE,
     touch_count INTEGER NOT NULL DEFAULT 0,
     last_contacted_at TIMESTAMP,
@@ -37,6 +37,23 @@ CREATE TABLE IF NOT EXISTS campaign_leads (
     PRIMARY KEY (campaign_id, lead_id)
 );
 
+-- staff must exist before campaign_staff (FK to staff.id)
+CREATE TABLE IF NOT EXISTS staff (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    email TEXT NOT NULL UNIQUE,
+    timezone TEXT,
+    availability TEXT,
+    dummy_slots TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS campaign_staff (
+    campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+    staff_id INTEGER NOT NULL REFERENCES staff(id) ON DELETE CASCADE,
+    PRIMARY KEY (campaign_id, staff_id)
+);
+
 CREATE TABLE IF NOT EXISTS email_messages (
     id SERIAL PRIMARY KEY,
     lead_id INTEGER NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
@@ -48,16 +65,6 @@ CREATE TABLE IF NOT EXISTS email_messages (
     intent TEXT,
     processed BOOLEAN NOT NULL DEFAULT FALSE,
     approved INTEGER NOT NULL DEFAULT 0 CHECK(approved IN (0,1,-1)),
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS staff (
-    id SERIAL PRIMARY KEY,
-    name TEXT NOT NULL,
-    email TEXT NOT NULL UNIQUE,
-    timezone TEXT,
-    availability TEXT,
-    dummy_slots TEXT,
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
@@ -81,6 +88,7 @@ CREATE TABLE IF NOT EXISTS events (
 
 CREATE INDEX IF NOT EXISTS idx_leads_email ON leads(email);
 CREATE INDEX IF NOT EXISTS idx_campaign_leads_lead_id ON campaign_leads(lead_id);
+CREATE INDEX IF NOT EXISTS idx_campaign_staff_staff_id ON campaign_staff(staff_id);
 CREATE INDEX IF NOT EXISTS idx_email_messages_lead_id ON email_messages(lead_id);
 CREATE INDEX IF NOT EXISTS idx_email_messages_processed ON email_messages(processed);
 CREATE INDEX IF NOT EXISTS idx_meetings_lead_id ON meetings(lead_id);

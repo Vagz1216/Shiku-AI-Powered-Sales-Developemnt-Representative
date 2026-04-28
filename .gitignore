@@ -50,6 +50,18 @@ logs/
 data/
 temp/
 
+# Terraform variable files (keep *.tfvars.example tracked)
+*.tfvars
+!*.tfvars.example
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+
+# Aurora schema helper (account-specific ARNs)
+terraform/database/aurora-schema.env
+
 # Coverage
 .coverage
 htmlcov/

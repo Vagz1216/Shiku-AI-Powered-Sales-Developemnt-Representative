@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS leads (
     company TEXT,
     industry TEXT,
     pain_points TEXT,
-    status TEXT NOT NULL DEFAULT 'NEW' CHECK(status IN ('NEW','CONTACTED','WARM','QUALIFIED','MEETING_BOOKED','COLD','OPTED_OUT')),
+    status TEXT NOT NULL DEFAULT 'NEW' CHECK(status IN ('NEW','CONTACTED','WARM','QUALIFIED','MEETING_PROPOSED','MEETING_BOOKED','COLD','OPTED_OUT')),
     email_opt_out INTEGER NOT NULL DEFAULT 0 CHECK(email_opt_out IN (0,1)),
     touch_count INTEGER NOT NULL DEFAULT 0,
     last_contacted_at TEXT,
@@ -42,6 +42,26 @@ CREATE TABLE IF NOT EXISTS campaign_leads (
     FOREIGN KEY (lead_id) REFERENCES leads(id) ON DELETE CASCADE
 );
 
+-- Staff (must exist before campaign_staff and meetings)
+CREATE TABLE IF NOT EXISTS staff (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    email TEXT NOT NULL UNIQUE,
+    timezone TEXT,
+    availability TEXT,
+    dummy_slots TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Campaign Staff (join)
+CREATE TABLE IF NOT EXISTS campaign_staff (
+    campaign_id INTEGER NOT NULL,
+    staff_id INTEGER NOT NULL,
+    PRIMARY KEY (campaign_id, staff_id),
+    FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE,
+    FOREIGN KEY (staff_id) REFERENCES staff(id) ON DELETE CASCADE
+);
+
 -- Email messages
 CREATE TABLE IF NOT EXISTS email_messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,7 +79,6 @@ CREATE TABLE IF NOT EXISTS email_messages (
     FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE SET NULL
 );
 
--- Meetings
 CREATE TABLE IF NOT EXISTS meetings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     lead_id INTEGER NOT NULL,
@@ -70,17 +89,6 @@ CREATE TABLE IF NOT EXISTS meetings (
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (lead_id) REFERENCES leads(id) ON DELETE CASCADE,
     FOREIGN KEY (staff_id) REFERENCES staff(id) ON DELETE CASCADE
-);
-
--- Staff
-CREATE TABLE IF NOT EXISTS staff (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    email TEXT NOT NULL UNIQUE,
-    timezone TEXT,
-    availability TEXT,
-    dummy_slots TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- Events (audit log)
@@ -95,6 +103,7 @@ CREATE TABLE IF NOT EXISTS events (
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_leads_email ON leads(email);
 CREATE INDEX IF NOT EXISTS idx_campaign_leads_lead_id ON campaign_leads(lead_id);
+CREATE INDEX IF NOT EXISTS idx_campaign_staff_staff_id ON campaign_staff(staff_id);
 CREATE INDEX IF NOT EXISTS idx_email_messages_lead_id ON email_messages(lead_id);
 CREATE INDEX IF NOT EXISTS idx_email_messages_processed ON email_messages(processed);
 CREATE INDEX IF NOT EXISTS idx_meetings_lead_id ON meetings(lead_id);

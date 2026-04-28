@@ -31,8 +31,10 @@ output "setup_instructions" {
     ║                                                            ║
     ║  Next steps:                                               ║
     ║  1. Copy the ARNs above into terraform/backend/terraform.tfvars
-    ║  2. Run: cd ../.. && uv run scripts/migrate_db.py          ║
-    ║     to create tables and seed data in Aurora                ║
+    ║  2. Apply schema (local AWS CLI creds):                   ║
+    ║     export AWS_REGION=us-west-2 DB_CLUSTER_ARN=... \\       ║
+    ║       DB_SECRET_ARN=... DB_NAME=${var.db_name}               ║
+    ║     uv run scripts/apply_aurora_schema.py [--seed]          ║
     ║                                                            ║
     ╚══════════════════════════════════════════════════════════════╝
   EOT

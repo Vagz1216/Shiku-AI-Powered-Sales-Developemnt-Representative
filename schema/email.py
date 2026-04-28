@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 class EmailIntent(BaseModel):
     """Structured intent classification result."""
     rationale: str = Field(description="Chain of thought explaining the reasoning behind the classification.")
-    intent: str = Field(description="Classified intent of the email e.g meeting_request, question, opt_out, interest, neutral, bounce, spam")
+    intent: str = Field(description="Classified intent of the email e.g meeting_request, meeting_confirmation, question, opt_out, interest, neutral, bounce, spam")
     confidence: float = Field(description="Confidence score of the classification (0.0 - 1.0)")
 
 

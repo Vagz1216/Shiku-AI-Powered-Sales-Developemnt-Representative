@@ -1,10 +1,10 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { SignInButton, SignOutButton, UserButton, ClerkLoaded, useAuth } from '@clerk/nextjs'
+import { SignInButton, SignOutButton, UserButton, ClerkLoaded, useAuth } from "@clerk/clerk-react";
 import Link from 'next/link'
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 interface Campaign {
   id: number
@@ -139,6 +139,9 @@ export default function Home() {
             <nav className="flex gap-4">
               <Link href="/" className="text-sm font-medium text-zinc-900 dark:text-zinc-100">Dashboard</Link>
               <Link href="/campaigns" className="text-sm text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100">Campaigns</Link>
+              <Link href="/leads" className="text-sm text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100">Leads</Link>
+              <Link href="/drafts" className="text-sm text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100">Drafts</Link>
+              <Link href="/staff" className="text-sm text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100">Staff</Link>
             </nav>
           )}
         </div>
@@ -283,7 +286,10 @@ export default function Home() {
                           log.status === 'warning' ? 'text-yellow-400' :
                           'text-zinc-300'
                         }`}>
-                          <span className="text-zinc-600">[{new Date().toLocaleTimeString()}]</span>
+                          <span className="text-zinc-600 shrink-0">[{new Date().toLocaleTimeString()}]</span>
+                          {log.event_id && (
+                            <span className="text-violet-400 font-mono text-xs shrink-0">[{log.event_id}]</span>
+                          )}
                           <span>{log.message}</span>
                         </div>
                       ))}

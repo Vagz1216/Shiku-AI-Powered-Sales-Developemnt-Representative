@@ -1,27 +1,40 @@
-aws_region = "us-east-1"
+# Copy to terraform.tfvars (gitignored). Fill from terraform/database outputs + your .env / secrets store.
 
-# From terraform/database outputs
-cluster_arn = "arn:aws:rds:us-east-1:ACCOUNT:cluster:sdr-cluster"
-secret_arn  = "arn:aws:secretsmanager:us-east-1:ACCOUNT:secret:sdr-aurora-credentials-xxxx"
+aws_region = "us-west-2"
+
+cluster_arn = "arn:aws:rds:us-west-2:ACCOUNT_ID:cluster:sdr-..."
+secret_arn  = "arn:aws:secretsmanager:us-west-2:ACCOUNT_ID:secret:sdr-aurora-credentials-..."
 db_name     = "sdr"
 
-# AI providers
-openai_api_key     = "sk-..."
-groq_api_key       = ""
-cerebras_api_key   = ""
-openrouter_api_key = ""
+# --- Primary + fallback AI (matches config/settings.py) ---
+openai_api_key      = ""
+openai_tracing_key  = "" # Optional; separate key for OpenAI tracing export (main.py). Omit if unused.
+groq_api_key        = "" # Optional comma-separated keys for rotation
+cerebras_api_key    = ""
+openrouter_api_key  = ""
 
-# AgentMail
-agentmail_api_key  = "your-agentmail-api-key"
-agentmail_inbox_id = "your-inbox-id"
+# --- Email + integrations ---
+agentmail_api_key   = ""
+agentmail_inbox_id  = ""
+composio_api_key    = ""
+composio_user_id    = "" # Optional Composio session user id
 
-# Composio (optional)
-composio_api_key = ""
+# --- Auth (frontend API routes) ---
+clerk_jwks_url      = "https://YOUR_INSTANCE.clerk.accounts.dev/.well-known/jwks.json"
+clerk_secret_key    = ""
+# Frontend static build needs the Publishable key (Dashboard → API Keys), not configured here:
+# put NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY in repo root .env or frontend/.env.local
 
-# Clerk auth
-clerk_jwks_url   = "https://your-clerk.clerk.accounts.dev/.well-known/jwks.json"
-clerk_secret_key = "sk_test_..."
+# --- Webhooks + browser ---
+webhook_secret      = "" # Match AgentMail / provider webhook HMAC secret
+# After CloudFront is live, set to your HTTPS site origin(s), comma-separated.
+cors_origins        = "https://YOUR_CLOUDFRONT_DOMAIN.cloudfront.net"
 
-# Security
-webhook_secret = ""
-cors_origins   = "http://localhost:3000"
+# --- Optional app tuning (see config/settings.py for names and defaults) ---
+# Same keys as env vars: INTENT_MODEL, RESPONSE_MODEL, OUTREACH_MODEL, REQUIRE_HUMAN_APPROVAL,
+# DAILY_EMAIL_LIMIT, USE_DUMMY_DATA, MAX_EMAILS_PER_LEAD, etc.
+extra_runtime_environment_variables = {
+  # "INTENT_MODEL"           = "gpt-4o-mini"
+  # "REQUIRE_HUMAN_APPROVAL" = "false"
+  # "DATA_SOURCE"            = "DB" # lead_service optional override
+}

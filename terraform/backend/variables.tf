@@ -1,6 +1,6 @@
 variable "aws_region" {
   type    = string
-  default = "us-east-1"
+  default = "us-west-2"
 }
 
 variable "cluster_arn" {
@@ -56,6 +56,19 @@ variable "composio_api_key" {
   sensitive = true
 }
 
+variable "composio_user_id" {
+  description = "Optional Composio user id for consistent tool sessions (maps to COMPOSIO_USER_ID)"
+  type        = string
+  default     = ""
+}
+
+variable "openai_tracing_key" {
+  description = "Optional separate OpenAI key for tracing export (OPENAI_TRACING_KEY); empty uses main OpenAI key only for chat"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 variable "clerk_jwks_url" {
   type = string
 }
@@ -74,4 +87,12 @@ variable "webhook_secret" {
 variable "cors_origins" {
   type    = string
   default = "http://localhost:3000"
+}
+
+# Optional tuning and features — matches config/settings.py (pydantic env names are UPPER_SNAKE_CASE).
+# Examples: INTENT_MODEL, RESPONSE_MODEL, OUTREACH_MODEL, REQUIRE_HUMAN_APPROVAL, DAILY_EMAIL_LIMIT, USE_DUMMY_DATA
+variable "extra_runtime_environment_variables" {
+  description = "Additional key/value pairs merged into App Runner container env (non-secret tuning)"
+  type        = map(string)
+  default     = {}
 }

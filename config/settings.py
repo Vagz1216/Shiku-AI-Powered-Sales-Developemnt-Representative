@@ -193,6 +193,14 @@ class AppConfig(BaseSettings):
         le=4096,
         description="Max tokens for outbound email generation",
     )
+    outreach_sender_name: str = Field(
+        default="Alex",
+        description="Sender display name used in outbound outreach signatures",
+    )
+    outreach_sender_company: str = Field(
+        default="Euclid Tech",
+        description="Sender company name used in outbound outreach signatures",
+    )
     max_words_per_email: int = Field(
         default=200,
         ge=1,

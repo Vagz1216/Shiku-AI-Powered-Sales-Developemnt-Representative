@@ -35,6 +35,10 @@ INSERT INTO staff (id, name, email, timezone, availability, dummy_slots) VALUES
   (6, 'Gabriel', 'gabriellegarcia9090@gmail.com', 'America/New_York', '{"monday": ["09:00-12:00","13:00-17:00"]}', '["2026-04-28 09:00", "2026-04-28 15:00", "2026-04-29 14:00"]')
 ON CONFLICT DO NOTHING;
 
+INSERT INTO campaign_staff (campaign_id, staff_id) VALUES
+  (1,1), (1,2), (1,3), (1,4), (1,5), (1,6)
+ON CONFLICT DO NOTHING;
+
 SELECT setval('campaigns_id_seq', (SELECT MAX(id) FROM campaigns));
 SELECT setval('leads_id_seq', (SELECT MAX(id) FROM leads));
 SELECT setval('staff_id_seq', (SELECT MAX(id) FROM staff));

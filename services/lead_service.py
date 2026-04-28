@@ -5,7 +5,7 @@ from utils.db_connection import get_conn, dict_from_row
 from .data_provider import LeadProvider
 from config.settings import settings
 
-VALID_STATUSES = {'NEW','CONTACTED','WARM','QUALIFIED','MEETING_BOOKED','COLD','OPTED_OUT'}
+VALID_STATUSES = {'NEW','CONTACTED','WARM','QUALIFIED','MEETING_PROPOSED','MEETING_BOOKED','COLD','OPTED_OUT'}
 
 def _now_iso():
     return datetime.datetime.utcnow().isoformat() + 'Z'
@@ -16,7 +16,9 @@ class DBLeadProvider(LeadProvider):
     def get_leads(self, campaign_id: Optional[int] = None, max_leads: Optional[int] = None, order_by: str = 'newest_first') -> Dict[str, Any]:
         conn = get_conn()
         query = """
-            SELECT l.id, l.name, l.email, l.company, l.industry, l.pain_points FROM leads l
+            SELECT l.id, l.name, l.email, l.company, l.industry, l.pain_points, l.status,
+                   l.touch_count, cl.emails_sent, cl.responded, cl.meeting_booked
+            FROM leads l
             JOIN campaign_leads cl ON cl.lead_id = l.id
             JOIN campaigns c ON c.id = cl.campaign_id
             WHERE l.email_opt_out = 0
@@ -36,6 +38,9 @@ class DBLeadProvider(LeadProvider):
             query += " ORDER BY l.created_at ASC"
         elif order_by == 'random':
             query += " ORDER BY RANDOM()"
+        elif order_by == 'highest_score':
+            # "Score" proxy: prioritize least-touched leads first, then newest.
+            query += " ORDER BY l.touch_count ASC, l.created_at DESC"
             
         if max_leads is not None:
             query += " LIMIT ?"
@@ -55,6 +60,11 @@ class DBLeadProvider(LeadProvider):
                 "company": l.get("company"),
                 "industry": l.get("industry"),
                 "pain_points": l.get("pain_points"),
+                "status": l.get("status"),
+                "touch_count": l.get("touch_count", 0),
+                "emails_sent": l.get("emails_sent", 0),
+                "responded": l.get("responded", 0),
+                "meeting_booked": l.get("meeting_booked", 0),
             })
         return {"success": True, "data": filtered, "error": None}
 

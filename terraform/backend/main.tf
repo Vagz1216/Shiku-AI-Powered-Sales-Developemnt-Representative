@@ -93,25 +93,31 @@ resource "aws_apprunner_service" "sdr_backend" {
       image_repository_type = "ECR"
       image_configuration {
         port = "8000"
-        runtime_environment_variables = {
-          DB_CLUSTER_ARN     = var.cluster_arn
-          DB_SECRET_ARN      = var.secret_arn
-          DB_NAME            = var.db_name
-          OPENAI_API_KEY     = var.openai_api_key
-          GROQ_API_KEY       = var.groq_api_key
-          CEREBRAS_API_KEY   = var.cerebras_api_key
-          OPENROUTER_API_KEY = var.openrouter_api_key
-          AGENTMAIL_API_KEY  = var.agentmail_api_key
-          AGENTMAIL_INBOX_ID = var.agentmail_inbox_id
-          COMPOSIO_API_KEY   = var.composio_api_key
-          CLERK_JWKS_URL     = var.clerk_jwks_url
-          CLERK_SECRET_KEY   = var.clerk_secret_key
-          WEBHOOK_SECRET     = var.webhook_secret
-          CORS_ORIGINS       = var.cors_origins
-          LOG_LEVEL          = "info"
-          DEBUG              = "false"
-          PORT               = "8000"
-        }
+        runtime_environment_variables = merge(
+          {
+            AWS_REGION         = var.aws_region
+            DB_CLUSTER_ARN     = var.cluster_arn
+            DB_SECRET_ARN      = var.secret_arn
+            DB_NAME            = var.db_name
+            OPENAI_API_KEY     = var.openai_api_key
+            OPENAI_TRACING_KEY = var.openai_tracing_key
+            GROQ_API_KEY       = var.groq_api_key
+            CEREBRAS_API_KEY   = var.cerebras_api_key
+            OPENROUTER_API_KEY = var.openrouter_api_key
+            AGENTMAIL_API_KEY  = var.agentmail_api_key
+            AGENTMAIL_INBOX_ID = var.agentmail_inbox_id
+            COMPOSIO_API_KEY   = var.composio_api_key
+            COMPOSIO_USER_ID   = var.composio_user_id
+            CLERK_JWKS_URL     = var.clerk_jwks_url
+            CLERK_SECRET_KEY   = var.clerk_secret_key
+            WEBHOOK_SECRET     = var.webhook_secret
+            CORS_ORIGINS       = var.cors_origins
+            LOG_LEVEL          = "info"
+            DEBUG              = "false"
+            PORT               = "8000"
+          },
+          var.extra_runtime_environment_variables
+        )
       }
     }
   }

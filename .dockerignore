@@ -3,31 +3,52 @@ __pycache__
 *.pyc
 .venv
 venv/
-.env*
+.env
+.env.local
+.env.production
+.env.development
 
 # Git and editors
 .git
+.gitignore
 .vscode/
 .idea/
 
-# Build artifacts
+# Build / package
 build/
 dist/
 *.egg-info/
 
-# Docker
+# Next.js — not part of this API image (huge)
+frontend/
+node_modules
+
+# Terraform — local state + provider cache (very large)
+terraform/
+**/.terraform
+*.tfstate
+*.tfstate.*
+*.tfvars
+!terraform.tfvars.example
+
+# Docker meta (context only)
 Dockerfile*
 .dockerignore
 docker-compose*
 
-# Documentation
+# Docs
 README.md
 *.md
 docs/
 
-# Development
+# Dev / test
 .pytest_cache
 .coverage
 tests/
 logs/
 data/
+
+# Local tools / misc
+ngrok
+*.sqlite3
+agent-transcripts

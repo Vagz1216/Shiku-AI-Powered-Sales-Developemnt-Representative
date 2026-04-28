@@ -1,2 +1,3 @@
-aws_region = "us-east-1"
+# Copy to terraform.tfvars (gitignored). Region matches Alex-style deployment for SDR.
+aws_region = "us-west-2"
 db_name    = "sdr"

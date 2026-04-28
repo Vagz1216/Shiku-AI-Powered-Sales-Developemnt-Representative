@@ -21,6 +21,10 @@ from tools import (
     notify_staff_about_meeting,
     generate_meeting_details,
 )
+from utils.quick_replies import (
+    quick_replies_for_meeting_proposal,
+    quick_replies_for_followup,
+)
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -30,19 +34,24 @@ if settings.openai_api_key:
 
 # ── Agent instructions ──────────────────────────────────────────────
 
-_MEETING_INSTRUCTIONS = """\
-You are an email-sending and meeting-coordination agent.
+_MEETING_REQUEST_INSTRUCTIONS = """\
+You are an email-sending and meeting-coordination agent handling a NEW meeting request.
+The client has asked to meet but has NOT yet confirmed a specific time.
 
 ## AVAILABLE TOOLS (call each ONE AT A TIME, wait for the result)
 1. get_staff_tool        → returns staff name, email, timezone, availability
 2. generate_meeting_details → proposes a meeting time (returns subject, start_time, duration, etc.)
 3. send_reply_email      → sends the email reply to the client
-4. notify_staff_about_meeting → emails the staff member so THEY create the calendar invite
+4. notify_staff_about_meeting → emails the staff member a HEADS-UP (tentative, not confirmed)
 
 ## YOUR WORKFLOW — execute these steps IN ORDER, one tool per step:
 
 **Step 1 → get_staff_tool()**
-Call with exclude_email set to the client's email (from the EMAIL section below). This avoids selecting a staff member with the same email as the client. Read the result to get staff email, timezone, and availability.
+Call with:
+- exclude_email set to the client's email (from the EMAIL section below)
+- campaign_id set to CAMPAIGN_ID from the EMAIL section
+If CAMPAIGN_ID is missing, call with exclude_email only.
+If the tool returns an error, stop and report that campaign staff assignment is missing.
 
 **Step 2 → generate_meeting_details()**
 Pass the client's email context, the staff email, availability, and timezone from Step 1.
@@ -57,15 +66,59 @@ Send the reply to the client. IMPORTANT:
 - Use the exact message_id and thread_id from the EMAIL section.
 
 **Step 4 → notify_staff_about_meeting()**
-Send the staff member an internal notification with the meeting details as a JSON string:
+Send the staff member a TENTATIVE heads-up notification. Pass confirmed=false.
+Include meeting details as a JSON string:
 {{"subject": "...", "start_time": "...", "duration_minutes": N, "description": "...", "conversation_summary": "..."}}
 Use the staff_email from Step 1 and the exact values from Step 2.
+If CAMPAIGN_ID exists, pass campaign_id=CAMPAIGN_ID.
 
 ## CRITICAL RULES
 - Call tools ONE AT A TIME. Wait for each result before proceeding.
 - NEVER call any tool more than once.
 - NEVER tell the client a calendar invite was already sent. The staff will do it manually.
-- If a tool fails, log the error mentally and move to the next step.
+- Pass confirmed=false to notify_staff_about_meeting (this is a proposal, not a confirmation).
+- After Step 4, output a brief summary of what you did.
+"""
+
+_MEETING_CONFIRMATION_INSTRUCTIONS = """\
+You are an email-sending and meeting-coordination agent handling a meeting CONFIRMATION.
+The client has confirmed or accepted a previously proposed meeting time.
+
+## AVAILABLE TOOLS (call each ONE AT A TIME, wait for the result)
+1. get_staff_tool        → returns staff name, email, timezone, availability
+2. generate_meeting_details → proposes meeting details based on what was previously agreed
+3. send_reply_email      → sends a confirmation reply to the client
+4. notify_staff_about_meeting → emails the staff member an ACTION REQUIRED notification (confirmed)
+
+## YOUR WORKFLOW — execute these steps IN ORDER, one tool per step:
+
+**Step 1 → get_staff_tool()**
+Call with:
+- exclude_email set to the client's email
+- campaign_id set to CAMPAIGN_ID from the EMAIL section
+If CAMPAIGN_ID is missing, call with exclude_email only.
+If the tool returns an error, stop and report that campaign staff assignment is missing.
+
+**Step 2 → generate_meeting_details()**
+Pass the client's context. The meeting time should match what was previously proposed in the conversation history.
+
+**Step 3 → send_reply_email()**
+Send a brief confirmation to the client:
+- Acknowledge their confirmation.
+- Mention that a calendar invite will be sent shortly.
+- Keep it short (1-2 paragraphs).
+- Use the exact message_id and thread_id from the EMAIL section.
+
+**Step 4 → notify_staff_about_meeting()**
+Send the staff member a CONFIRMED action-required notification. Pass confirmed=true.
+Include meeting details as a JSON string:
+{{"subject": "...", "start_time": "...", "duration_minutes": N, "description": "...", "conversation_summary": "..."}}
+If CAMPAIGN_ID exists, pass campaign_id=CAMPAIGN_ID.
+
+## CRITICAL RULES
+- Call tools ONE AT A TIME. Wait for each result before proceeding.
+- NEVER call any tool more than once.
+- Pass confirmed=true to notify_staff_about_meeting (client has confirmed).
 - After Step 4, output a brief summary of what you did.
 """
 
@@ -89,6 +142,7 @@ class EmailSenderAgent:
         message_id = email_data.get('message_id')
         thread_id = email_data.get('thread_id')
         subject = email_data.get('subject', '')
+        campaign_id = email_data.get('campaign_id')
         intent_data = email_data.get('intent', {})
         intent = intent_data.get('intent', 'unknown')
         email_content = email_data.get('content', '')
@@ -99,21 +153,58 @@ class EmailSenderAgent:
 
         response_text = _rewrite_calendar_claims(approved_response)
 
-        is_meeting = intent == "meeting_request"
-        instructions = _MEETING_INSTRUCTIONS if is_meeting else _SIMPLE_INSTRUCTIONS
+        is_meeting_request = intent == "meeting_request"
+        is_meeting_confirmation = intent == "meeting_confirmation"
+        is_meeting = is_meeting_request or is_meeting_confirmation
+
+        if is_meeting_confirmation:
+            instructions = _MEETING_CONFIRMATION_INSTRUCTIONS
+        elif is_meeting_request:
+            instructions = _MEETING_REQUEST_INSTRUCTIONS
+        else:
+            instructions = _SIMPLE_INSTRUCTIONS
+
         tools = [send_reply_email, get_staff_tool, generate_meeting_details, notify_staff_about_meeting] if is_meeting else [send_reply_email]
+
+        meeting_action = 'NO - just send the reply'
+        if is_meeting_request:
+            meeting_action = 'YES - follow the 4-step meeting PROPOSAL workflow (tentative, pass confirmed=false)'
+        elif is_meeting_confirmation:
+            meeting_action = 'YES - follow the 4-step meeting CONFIRMATION workflow (confirmed, pass confirmed=true)'
+
+        if is_meeting_request:
+            qr_block = quick_replies_for_meeting_proposal(
+                subject,
+                lead_email=sender_email,
+                campaign_id=campaign_id,
+            )
+        elif intent in ("question", "interest", "neutral"):
+            qr_block = quick_replies_for_followup(
+                subject,
+                lead_email=sender_email,
+                campaign_id=campaign_id,
+            )
+        else:
+            qr_block = ""
+
+        qr_instruction = ""
+        if qr_block:
+            qr_instruction = f"""
+QUICK REPLY BLOCK (append this EXACTLY as-is at the end of the email body, BEFORE the signature):
+{qr_block}
+"""
 
         context = f"""RESPONSE: {response_text}
 
-EMAIL: From {sender_email} ({sender_name}) | Subject: {subject} | MSG_ID: {message_id} | Thread: {thread_id}
+EMAIL: From {sender_email} ({sender_name}) | Subject: {subject} | MSG_ID: {message_id} | Thread: {thread_id} | CAMPAIGN_ID: {campaign_id}
 INTENT: {intent} (confidence: {intent_data.get('confidence', 0.0)})
 
 CONTENT: {email_content}
 HISTORY: {conversation_history or 'None'}
-
+{qr_instruction}
 ACTIONS:
 1. Send reply using message_id="{message_id}" and thread_id="{thread_id}"
-2. Meeting: {'YES - follow the 4-step meeting workflow' if is_meeting else 'NO - just send the reply'}
+2. Meeting: {meeting_action}
 """
 
         try:

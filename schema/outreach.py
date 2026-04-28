@@ -12,7 +12,7 @@ class CampaignInfo(BaseModel):
     status: str = Field(description="Campaign status (ACTIVE, PAUSED, INACTIVE)")
     meeting_delay_days: int = Field(default=1, description="Days to delay meeting scheduling")
     max_leads_per_campaign: int | None = Field(default=None, description="Max leads to contact")
-    lead_selection_order: str = Field(default="newest_first", description="Order to select leads (newest_first, oldest_first, random)")
+    lead_selection_order: str = Field(default="newest_first", description="Order to select leads (newest_first, oldest_first, random, highest_score)")
     auto_approve_drafts: bool = Field(default=False, description="Whether to auto-approve email drafts for this campaign")
     max_emails_per_lead: int = Field(default=5, description="Max emails to send per lead in this campaign")
 
@@ -25,7 +25,7 @@ class CampaignCreate(BaseModel):
     status: str = Field(default="ACTIVE", description="Campaign status (ACTIVE, PAUSED, INACTIVE)")
     meeting_delay_days: int = Field(default=1, description="Days to delay meeting scheduling")
     max_leads_per_campaign: int | None = Field(default=None, description="Max leads to contact")
-    lead_selection_order: str = Field(default="newest_first", description="Order to select leads")
+    lead_selection_order: str = Field(default="newest_first", description="Order to select leads (newest_first, oldest_first, random, highest_score)")
     auto_approve_drafts: bool = Field(default=False, description="Whether to auto-approve email drafts")
     max_emails_per_lead: int = Field(default=5, description="Max emails to send per lead")
 

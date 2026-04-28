@@ -1,9 +1,10 @@
-import { SignUp } from "@clerk/nextjs";
+import { SignUpPanel } from "./sign-up-panel";
+
+/** Required for `output: "export"` (S3 static hosting). */
+export function generateStaticParams() {
+  return [{ "sign-up": [] as string[] }];
+}
 
 export default function Page() {
-  return (
-    <div className="flex items-center justify-center min-h-screen bg-gray-50">
-      <SignUp routing="hash" />
-    </div>
-  );
+  return <SignUpPanel />;
 }

@@ -68,6 +68,7 @@ async def send_plain_email(
     email: str, name: str, subject: str, body: str,
     skip_safety_check: bool = False,
     internal: bool = False,
+    html_body: str | None = None,
 ) -> SendEmailResult:
     """Send a plain-text email via AgentMail (no agent wrapper).
 
@@ -117,7 +118,7 @@ async def send_plain_email(
 
     if error := _validate_config():
         return SendEmailResult(ok=False, error=error)
-    result = _send_with_retry(email, name, subject, body)
+    result = _send_with_retry(email, name, subject, body, html_body=html_body)
     if result.ok:
         _increment_daily_count()
     return result
@@ -151,18 +152,29 @@ def _validate_config() -> str | None:
     return None
 
 
-def _send_with_retry(email: str, name: str, subject: str, body: str) -> SendEmailResult:
+def _send_with_retry(email: str, name: str, subject: str, body: str, html_body: str | None = None) -> SendEmailResult:
     client = AgentMail(api_key=settings.agent_mail_api)
     name = (name or "").strip()
     to = formataddr((name, email)) if name else email
     for attempt in range(5):
         try:
-            response = client.inboxes.messages.send(
-                settings.agent_mail_inbox,
-                to=to,
-                subject=subject.strip(),
-                text=body.strip(),
-            )
+            payload = {
+                "to": to,
+                "subject": subject.strip(),
+                "text": body.strip(),
+            }
+            if html_body:
+                payload["html"] = html_body.strip()
+
+            try:
+                response = client.inboxes.messages.send(settings.agent_mail_inbox, **payload)
+            except TypeError as sdk_error:
+                if "html" in payload:
+                    logger.warning(f"AgentMail SDK rejected html payload, retrying text-only: {sdk_error}")
+                    payload.pop("html", None)
+                    response = client.inboxes.messages.send(settings.agent_mail_inbox, **payload)
+                else:
+                    raise
             return SendEmailResult(
                 ok=True,
                 message_id=str(response.message_id),

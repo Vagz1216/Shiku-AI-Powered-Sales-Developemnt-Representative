@@ -1,2 +1,5 @@
-aws_region  = "us-east-1"
-backend_url = "https://xxx.us-east-1.awsapprunner.com"
+# Copy to terraform.tfvars (gitignored). Use service_url from terraform/backend output.
+
+aws_region = "us-west-2"
+
+backend_url = "https://XXXXXXXX.us-west-2.awsapprunner.com"
