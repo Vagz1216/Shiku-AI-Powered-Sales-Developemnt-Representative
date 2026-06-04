@@ -1,8 +1,9 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
-import { useAuth, ClerkLoaded, UserButton } from "@clerk/clerk-react";
-import Link from 'next/link'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useAuth } from "@clerk/clerk-react";
+import { AppShell } from '@/components/app-shell'
+import { useTenantScope } from '@/components/tenant-scope'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -27,8 +28,13 @@ interface CampaignStaffRow {
   assigned: number
 }
 
+function getErrorMessage(err: unknown, fallback: string) {
+  return err instanceof Error ? err.message : fallback
+}
+
 export default function StaffPage() {
   const { isLoaded, userId, getToken } = useAuth()
+  const { selectedOrganizationId, selectedOrganization, orgUrl } = useTenantScope()
   const [staff, setStaff] = useState<Staff[]>([])
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
   const [selectedCampaignId, setSelectedCampaignId] = useState<number | null>(null)
@@ -47,60 +53,64 @@ export default function StaffPage() {
     availability: '',
   })
   const [editing, setEditing] = useState(false)
+  const canManageStaff = !!selectedOrganization?.capabilities?.can_manage_staff
 
-  useEffect(() => {
-    if (isLoaded && userId) {
-      void loadInitial()
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLoaded, userId])
+  const loadCampaignStaff = useCallback(async (campaignId: number) => {
+    const token = await getToken()
+    const res = await fetch(orgUrl(`${API_BASE}/api/campaigns/${campaignId}/staff`), {
+      headers: { 'Authorization': `Bearer ${token}` }
+    })
+    if (!res.ok) throw new Error('Failed to load campaign staff')
+    const data = await res.json() as { staff?: CampaignStaffRow[] }
+    const rows = data.staff || []
+    setCampaignStaff(rows)
+    setSelectedStaffIds(rows.filter((s) => !!s.assigned).map((s) => s.id))
+  }, [getToken, orgUrl])
 
-  const loadInitial = async () => {
+  const loadInitial = useCallback(async () => {
     try {
+      if (!selectedOrganizationId) return
+      const token = await getToken()
       setLoading(true)
       setError('')
-      const token = await getToken()
       const [staffRes, campaignsRes] = await Promise.all([
-        fetch(`${API_BASE}/api/staff`, { headers: { 'Authorization': `Bearer ${token}` } }),
-        fetch(`${API_BASE}/api/campaigns?active_only=false`, { headers: { 'Authorization': `Bearer ${token}` } }),
+        fetch(orgUrl(`${API_BASE}/api/staff`), { headers: { 'Authorization': `Bearer ${token}` } }),
+        fetch(orgUrl(`${API_BASE}/api/campaigns?active_only=false`), { headers: { 'Authorization': `Bearer ${token}` } }),
       ])
       if (!staffRes.ok) throw new Error('Failed to load staff')
       if (!campaignsRes.ok) throw new Error('Failed to load campaigns')
-      const staffData = await staffRes.json()
-      const campaignData = await campaignsRes.json()
+      const staffData = await staffRes.json() as { staff?: Staff[] }
+      const campaignData = await campaignsRes.json() as { campaigns?: Campaign[] }
       setStaff(staffData.staff || [])
-      const campList = campaignData.campaigns || []
+      const campList: Campaign[] = campaignData.campaigns || []
       setCampaigns(campList)
       if (campList.length > 0) {
         const firstId = campList[0].id
         setSelectedCampaignId(firstId)
         await loadCampaignStaff(firstId)
       }
-    } catch (err: any) {
-      setError(err.message || 'Failed to load data')
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to load data'))
     } finally {
       setLoading(false)
     }
-  }
+  }, [getToken, loadCampaignStaff, orgUrl, selectedOrganizationId])
+
+  useEffect(() => {
+    if (isLoaded && userId && selectedOrganizationId) {
+      const timer = window.setTimeout(() => {
+        void loadInitial()
+      }, 0)
+      return () => window.clearTimeout(timer)
+    }
+  }, [isLoaded, userId, selectedOrganizationId, loadInitial])
 
   const loadStaffOnly = async () => {
     const token = await getToken()
-    const res = await fetch(`${API_BASE}/api/staff`, { headers: { 'Authorization': `Bearer ${token}` } })
+    const res = await fetch(orgUrl(`${API_BASE}/api/staff`), { headers: { 'Authorization': `Bearer ${token}` } })
     if (!res.ok) throw new Error('Failed to load staff')
-    const data = await res.json()
+    const data = await res.json() as { staff?: Staff[] }
     setStaff(data.staff || [])
-  }
-
-  const loadCampaignStaff = async (campaignId: number) => {
-    const token = await getToken()
-    const res = await fetch(`${API_BASE}/api/campaigns/${campaignId}/staff`, {
-      headers: { 'Authorization': `Bearer ${token}` }
-    })
-    if (!res.ok) throw new Error('Failed to load campaign staff')
-    const data = await res.json()
-    const rows = data.staff || []
-    setCampaignStaff(rows)
-    setSelectedStaffIds(rows.filter((s: CampaignStaffRow) => !!s.assigned).map((s: CampaignStaffRow) => s.id))
   }
 
   const resetForm = () => {
@@ -120,7 +130,7 @@ export default function StaffPage() {
         availability: formData.availability || null,
         dummy_slots: null
       }
-      const url = editing ? `${API_BASE}/api/staff/${formData.id}` : `${API_BASE}/api/staff`
+      const url = editing ? orgUrl(`${API_BASE}/api/staff/${formData.id}`) : orgUrl(`${API_BASE}/api/staff`)
       const method = editing ? 'PUT' : 'POST'
       const res = await fetch(url, {
         method,
@@ -134,8 +144,8 @@ export default function StaffPage() {
       resetForm()
       await loadStaffOnly()
       if (selectedCampaignId) await loadCampaignStaff(selectedCampaignId)
-    } catch (err: any) {
-      alert(err.message || 'Failed to save staff')
+    } catch (err: unknown) {
+      alert(getErrorMessage(err, 'Failed to save staff'))
     } finally {
       setSaving(false)
     }
@@ -157,15 +167,15 @@ export default function StaffPage() {
     try {
       setSaving(true)
       const token = await getToken()
-      const res = await fetch(`${API_BASE}/api/staff/${staffId}`, {
+      const res = await fetch(orgUrl(`${API_BASE}/api/staff/${staffId}`), {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${token}` }
       })
       if (!res.ok) throw new Error('Failed to delete staff')
       await loadStaffOnly()
       if (selectedCampaignId) await loadCampaignStaff(selectedCampaignId)
-    } catch (err: any) {
-      alert(err.message || 'Failed to delete staff')
+    } catch (err: unknown) {
+      alert(getErrorMessage(err, 'Failed to delete staff'))
     } finally {
       setSaving(false)
     }
@@ -182,7 +192,7 @@ export default function StaffPage() {
     try {
       setSaving(true)
       const token = await getToken()
-      const res = await fetch(`${API_BASE}/api/campaigns/${selectedCampaignId}/staff`, {
+      const res = await fetch(orgUrl(`${API_BASE}/api/campaigns/${selectedCampaignId}/staff`), {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -192,8 +202,8 @@ export default function StaffPage() {
       })
       if (!res.ok) throw new Error('Failed to save assignments')
       await loadCampaignStaff(selectedCampaignId)
-    } catch (err: any) {
-      alert(err.message || 'Failed to save assignments')
+    } catch (err: unknown) {
+      alert(getErrorMessage(err, 'Failed to save assignments'))
     } finally {
       setSaving(false)
     }
@@ -214,23 +224,7 @@ export default function StaffPage() {
   }
 
   return (
-    <div className="flex flex-col min-h-screen bg-zinc-50 dark:bg-zinc-950">
-      <header className="flex items-center justify-between px-8 py-4 bg-white border-b border-zinc-200 dark:bg-zinc-900 dark:border-zinc-800">
-        <div className="flex items-center gap-6">
-          <h1 className="text-xl font-bold text-zinc-900 dark:text-zinc-50">Shiku SDR</h1>
-          <nav className="flex gap-4">
-            <Link href="/" className="text-sm text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100">Dashboard</Link>
-            <Link href="/campaigns" className="text-sm text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100">Campaigns</Link>
-            <Link href="/leads" className="text-sm text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100">Leads</Link>
-            <Link href="/drafts" className="text-sm text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100">Drafts</Link>
-            <Link href="/staff" className="text-sm font-medium text-zinc-900 dark:text-zinc-100">Staff</Link>
-          </nav>
-        </div>
-        <ClerkLoaded>
-          <UserButton />
-        </ClerkLoaded>
-      </header>
-
+    <AppShell active="staff">
       <main className="flex-1 max-w-7xl mx-auto w-full p-8 space-y-6">
         <h2 className="text-2xl font-bold text-zinc-900 dark:text-zinc-50">Campaign Staff Routing</h2>
         <p className="text-sm text-zinc-600 dark:text-zinc-400">
@@ -284,7 +278,7 @@ export default function StaffPage() {
               <div className="flex gap-2">
                 <button
                   type="submit"
-                  disabled={saving}
+                  disabled={saving || !canManageStaff}
                   className="px-3 py-2 bg-zinc-900 text-white rounded-md text-sm font-medium disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900"
                 >
                   {editing ? 'Update Staff' : 'Add Staff'}
@@ -322,8 +316,8 @@ export default function StaffPage() {
                         </td>
                         <td className="px-3 py-2">{s.email}</td>
                         <td className="px-3 py-2 text-right">
-                          <button onClick={() => editStaff(s)} className="text-blue-600 hover:text-blue-800 dark:text-blue-400 mr-3">Edit</button>
-                          <button onClick={() => void removeStaff(s.id)} className="text-red-600 hover:text-red-800 dark:text-red-400">Delete</button>
+                          <button disabled={!canManageStaff} onClick={() => editStaff(s)} className="text-blue-600 hover:text-blue-800 disabled:opacity-50 dark:text-blue-400 mr-3">Edit</button>
+                          <button disabled={!canManageStaff} onClick={() => void removeStaff(s.id)} className="text-red-600 hover:text-red-800 disabled:opacity-50 dark:text-red-400">Delete</button>
                         </td>
                       </tr>
                     ))}
@@ -379,7 +373,7 @@ export default function StaffPage() {
             </div>
             <div className="mt-4 flex justify-end">
               <button
-                disabled={saving || !selectedCampaignId}
+                disabled={saving || !selectedCampaignId || !canManageStaff}
                 onClick={() => void saveAssignments()}
                 className="px-4 py-2 bg-zinc-900 text-white rounded-md text-sm font-medium disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900"
               >
@@ -389,6 +383,6 @@ export default function StaffPage() {
           </section>
         </div>
       </main>
-    </div>
+    </AppShell>
   )
 }

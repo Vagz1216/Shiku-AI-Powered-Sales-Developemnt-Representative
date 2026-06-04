@@ -1,0 +1,96 @@
+{
+  "version": "2026-05-31",
+  "currency": "USD",
+  "unit": "per_1m_tokens",
+  "note": "Editable estimates for the in-app usage ledger. Verify provider pricing, region, routing, and contracted rates before production billing decisions.",
+  "models": [
+    {
+      "provider": "OpenAI",
+      "model": "gpt-4o-mini",
+      "input_usd_per_1m": 0.15,
+      "cached_input_usd_per_1m": 0.075,
+      "output_usd_per_1m": 0.6,
+      "source": "configured"
+    },
+    {
+      "provider": "OpenAI",
+      "model": "gpt-5.5",
+      "input_usd_per_1m": 5,
+      "cached_input_usd_per_1m": 0.5,
+      "output_usd_per_1m": 30,
+      "source": "openai-api-pricing-2026-06-04"
+    },
+    {
+      "provider": "AzureOpenAI",
+      "model": "gpt-4o-mini",
+      "input_usd_per_1m": 0.15,
+      "cached_input_usd_per_1m": 0.075,
+      "output_usd_per_1m": 0.6,
+      "source": "configured"
+    },
+    {
+      "provider": "AzureOpenAI",
+      "model": "gpt-5.5",
+      "input_usd_per_1m": 5,
+      "cached_input_usd_per_1m": 0.5,
+      "output_usd_per_1m": 30,
+      "source": "openai-api-pricing-2026-06-04-verify-azure-rate"
+    },
+    {
+      "provider": "Groq",
+      "model": "llama-3.3-70b-versatile",
+      "input_usd_per_1m": 0.59,
+      "cached_input_usd_per_1m": 0,
+      "output_usd_per_1m": 0.79,
+      "source": "groq-pricing-2026-06-04"
+    },
+    {
+      "provider": "Cerebras",
+      "model": "llama3.1-8b",
+      "input_usd_per_1m": 0,
+      "cached_input_usd_per_1m": 0,
+      "output_usd_per_1m": 0,
+      "source": "cerebras-free-tier-or-external-verify-paid-plan"
+    },
+    {
+      "provider": "Meta",
+      "model": "meta-llama/llama-4-maverick",
+      "input_usd_per_1m": 0.15,
+      "cached_input_usd_per_1m": 0,
+      "output_usd_per_1m": 0.6,
+      "source": "openrouter-pricing-2026-06-04"
+    },
+    {
+      "provider": "OpenRouter-Llama",
+      "model": "meta-llama/llama-3.3-70b-instruct",
+      "input_usd_per_1m": 0.1,
+      "cached_input_usd_per_1m": 0,
+      "output_usd_per_1m": 0.32,
+      "source": "openrouter-pricing-2026-06-04"
+    },
+    {
+      "provider": "DeepSeek",
+      "model": "deepseek/deepseek-v3.2",
+      "input_usd_per_1m": 0.2288,
+      "cached_input_usd_per_1m": 0,
+      "output_usd_per_1m": 0.3432,
+      "source": "openrouter-pricing-2026-06-04"
+    },
+    {
+      "provider": "Google",
+      "model": "google/gemini-2.5-flash",
+      "input_usd_per_1m": 0.3,
+      "cached_input_usd_per_1m": 0,
+      "output_usd_per_1m": 2.5,
+      "source": "openrouter-pricing-2026-06-04"
+    },
+    {
+      "provider": "Anthropic",
+      "model": "anthropic/claude-sonnet-4.6",
+      "input_usd_per_1m": 3,
+      "cached_input_usd_per_1m": 0,
+      "output_usd_per_1m": 15,
+      "source": "openrouter-pricing-2026-06-04"
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+services:
+  - type: web
+    name: shiku-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    disk:
+      name: shiku-sqlite-data
+      mountPath: /app/db
+      sizeGB: 1
+    envVars:
+      - key: PORT
+        value: 8000
+      - key: DATABASE_URL
+        value: sqlite:////app/db/sdr.sqlite3
+      - key: LOG_LEVEL
+        value: info
+      - key: SCHEDULED_SENDER_ENABLED
+        value: true
+      - key: RATE_LIMIT_REQUESTS_PER_MINUTE
+        value: 60
+      - key: REQUIRE_HUMAN_APPROVAL
+        value: true
+      - key: CORS_ORIGINS
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: AGENTMAIL_API_KEY
+        sync: false
+      - key: AGENTMAIL_INBOX_ID
+        sync: false
+      - key: CLERK_SECRET_KEY
+        sync: false
+      - key: CLERK_JWKS_URL
+        sync: false
+      - key: MAILBOX_ENCRYPTION_KEY
+        sync: false
+      - key: PLATFORM_OWNER_EMAILS
+        sync: false
+      - key: CRON_SECRET
+        sync: false

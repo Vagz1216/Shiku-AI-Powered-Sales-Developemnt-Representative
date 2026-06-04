@@ -1,10 +1,12 @@
 """Tool-related Pydantic schemas."""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class SendEmailResult(BaseModel):
     """Result of sending an email."""
+    model_config = ConfigDict(extra="forbid")
+
     ok: bool = Field(description="Whether the email was sent successfully")
     message_id: str | None = Field(None, description="ID of the sent message if successful")
     thread_id: str | None = Field(None, description="ID of the email thread if applicable")
@@ -13,6 +15,8 @@ class SendEmailResult(BaseModel):
 
 class LeadOut(BaseModel):
     """Lead output schema with full details."""
+    model_config = ConfigDict(extra="forbid")
+
     id: int | None = Field(None, description="Lead's ID")
     name: str | None = Field(None, description="Lead's name")
     email: str = Field(description="Lead's email address")
@@ -23,6 +27,8 @@ class LeadOut(BaseModel):
 
 class StaffOut(BaseModel):
     """Staff output schema with name, email, timezone, and availability."""
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(description="Staff member's name")
     email: str = Field(description="Staff member's email address")
     timezone: str | None = Field(None, description="Staff member's timezone")

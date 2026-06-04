@@ -45,13 +45,11 @@ logs/
 *.db
 *.sqlite
 *.sqlite3
+*.sqlite3*
 
 # Local data
 data/
 temp/
-
-# Deploy notes — maintain locally / elsewhere until AWS docs are finalized
-docs/
 
 # Terraform variable files (keep *.tfvars.example tracked)
 *.tfvars
@@ -87,3 +85,7 @@ Pasted image.png
 # Node
 node_modules/
 .next/
+out/
+frontend/out/
+.vercel/
+frontend/.vercel/

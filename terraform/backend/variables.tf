@@ -23,6 +23,37 @@ variable "openai_api_key" {
   sensitive = true
 }
 
+variable "azure_openai_api_key" {
+  description = "Azure OpenAI API key. When set with endpoint and deployment, Azure is the primary AI provider."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "azure_openai_endpoint" {
+  description = "Azure OpenAI endpoint, for example https://resource.openai.azure.com"
+  type        = string
+  default     = ""
+}
+
+variable "azure_openai_deployment" {
+  description = "Azure OpenAI deployment name used as the primary model identifier."
+  type        = string
+  default     = ""
+}
+
+variable "azure_openai_api_version" {
+  description = "Azure OpenAI API version."
+  type        = string
+  default     = "2024-10-21"
+}
+
+variable "azure_openai_wire_api" {
+  description = "Azure OpenAI wire API used by the Agents SDK provider: chat_completions or responses."
+  type        = string
+  default     = "chat_completions"
+}
+
 variable "groq_api_key" {
   type      = string
   default   = ""
@@ -60,13 +91,6 @@ variable "composio_user_id" {
   description = "Optional Composio user id for consistent tool sessions (maps to COMPOSIO_USER_ID)"
   type        = string
   default     = ""
-}
-
-variable "openai_tracing_key" {
-  description = "Optional separate OpenAI key for tracing export (OPENAI_TRACING_KEY); empty uses main OpenAI key only for chat"
-  type        = string
-  default     = ""
-  sensitive   = true
 }
 
 variable "clerk_jwks_url" {

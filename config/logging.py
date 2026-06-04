@@ -3,18 +3,45 @@
 import json
 import logging
 import logging.handlers
+from contextvars import ContextVar
+from datetime import datetime
 from pathlib import Path
 
 # Global flag to prevent multiple logging setup
 _logging_configured = False
+_request_id: ContextVar[str] = ContextVar("request_id", default="-")
+_RESERVED_LOG_RECORD_ATTRS = {
+    "name", "msg", "args", "levelname", "levelno", "pathname", "filename", "module",
+    "exc_info", "exc_text", "stack_info", "lineno", "funcName", "created", "msecs",
+    "relativeCreated", "thread", "threadName", "processName", "process", "message",
+    "asctime", "request_id", "component", "kind", "taskName",
+}
+
+
+def set_request_id(request_id: str):
+    """Bind a request ID to the current async context."""
+    return _request_id.set(request_id)
+
+
+def reset_request_id(token) -> None:
+    """Reset the request ID context after a request completes."""
+    _request_id.reset(token)
+
+
+def get_request_id() -> str:
+    """Return the current request ID for structured logs."""
+    return _request_id.get()
 
 
 class JSONFormatter(logging.Formatter):
     """Structured JSON formatter for AWS CloudWatch compatibility."""
     def format(self, record: logging.LogRecord) -> str:
         log_data = {
-            "timestamp": self.formatTime(record, self.datefmt),
+            "timestamp": datetime.fromtimestamp(record.created).astimezone().isoformat(timespec="milliseconds"),
             "level": record.levelname,
+            "request_id": getattr(record, "request_id", get_request_id()),
+            "component": getattr(record, "component", record.name),
+            "kind": getattr(record, "kind", "log"),
             "logger": record.name,
             "message": record.getMessage(),
             "module": record.module,
@@ -25,6 +52,14 @@ class JSONFormatter(logging.Formatter):
         # Add exception info if any
         if record.exc_info:
             log_data["exception"] = self.formatException(record.exc_info)
+
+        data = {
+            key: value
+            for key, value in record.__dict__.items()
+            if key not in _RESERVED_LOG_RECORD_ATTRS and not key.startswith("_")
+        }
+        if data:
+            log_data["data"] = data
             
         return json.dumps(log_data)
 
@@ -54,7 +89,7 @@ def setup_logging() -> None:
     root_logger.handlers.clear()
     
     # Create formatters
-    json_formatter = JSONFormatter(datefmt='%Y-%m-%dT%H:%M:%SZ')
+    json_formatter = JSONFormatter()
     simple_formatter = logging.Formatter(
         '%(asctime)s - %(levelname)s - %(message)s',
         datefmt='%H:%M:%S'

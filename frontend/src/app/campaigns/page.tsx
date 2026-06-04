@@ -1,8 +1,9 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { useAuth, UserButton, ClerkLoaded } from "@clerk/clerk-react";
-import Link from 'next/link'
+import { useCallback, useEffect, useState } from 'react'
+import { useAuth } from "@clerk/clerk-react";
+import { AppShell } from '@/components/app-shell'
+import { useTenantScope } from '@/components/tenant-scope'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -16,6 +17,7 @@ interface Campaign {
   max_leads_per_campaign: number | null
   lead_selection_order: string
   auto_approve_drafts: boolean
+  auto_approve_monitor_replies: boolean
   max_emails_per_lead: number
   staff_names?: string[]
 }
@@ -33,8 +35,27 @@ interface CampaignLead {
   meeting_booked: number
 }
 
+interface StaffAssignment {
+  name: string
+  assigned: boolean | number
+}
+
+interface SequenceStep {
+  id?: number
+  step_number: number
+  delay_days: number
+  subject_template: string
+  body_template: string
+  active: boolean | number
+}
+
+function getErrorMessage(err: unknown, fallback: string) {
+  return err instanceof Error ? err.message : fallback
+}
+
 export default function CampaignsPage() {
   const { isLoaded, userId, getToken } = useAuth()
+  const { selectedOrganizationId, selectedOrganization, orgUrl } = useTenantScope()
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -47,6 +68,10 @@ export default function CampaignsPage() {
   const [campaignLeads, setCampaignLeads] = useState<CampaignLead[]>([])
   const [selectedLeadIds, setSelectedLeadIds] = useState<number[]>([])
   const [leadsSaving, setLeadsSaving] = useState(false)
+  const [isSequenceModalOpen, setIsSequenceModalOpen] = useState(false)
+  const [sequenceCampaign, setSequenceCampaign] = useState<Campaign | null>(null)
+  const [sequenceSteps, setSequenceSteps] = useState<SequenceStep[]>([])
+  const [sequenceSaving, setSequenceSaving] = useState(false)
   
   // Form State
   const [formData, setFormData] = useState({
@@ -58,39 +83,36 @@ export default function CampaignsPage() {
     max_leads_per_campaign: '',
     lead_selection_order: 'newest_first',
     auto_approve_drafts: false,
+    auto_approve_monitor_replies: false,
     max_emails_per_lead: 5
   })
+  const canManageCampaigns = !!selectedOrganization?.capabilities?.can_manage_campaigns
 
-  useEffect(() => {
-    if (isLoaded && userId) {
-      loadCampaigns()
-    }
-  }, [isLoaded, userId])
-
-  const loadCampaigns = async () => {
+  const loadCampaigns = useCallback(async () => {
     try {
-      setLoading(true)
+      if (!selectedOrganizationId) return
       const token = await getToken()
-      const res = await fetch(`${API_BASE}/api/campaigns?active_only=false`, {
+      setLoading(true)
+      const res = await fetch(orgUrl(`${API_BASE}/api/campaigns?active_only=false`), {
         headers: { 'Authorization': `Bearer ${token}` }
       })
       if (!res.ok) throw new Error('Failed to fetch campaigns')
-      const data = await res.json()
+      const data = await res.json() as { campaigns?: Campaign[] }
       const baseCampaigns: Campaign[] = data.campaigns || []
 
       const campaignsWithStaff = await Promise.all(
         baseCampaigns.map(async (campaign) => {
           try {
-            const staffRes = await fetch(`${API_BASE}/api/campaigns/${campaign.id}/staff`, {
+            const staffRes = await fetch(orgUrl(`${API_BASE}/api/campaigns/${campaign.id}/staff`), {
               headers: { 'Authorization': `Bearer ${token}` }
             })
             if (!staffRes.ok) {
               return { ...campaign, staff_names: [] }
             }
-            const staffData = await staffRes.json()
+            const staffData = await staffRes.json() as { staff?: StaffAssignment[] }
             const assignedNames = (staffData.staff || [])
-              .filter((s: any) => !!s.assigned)
-              .map((s: any) => s.name)
+              .filter((s) => !!s.assigned)
+              .map((s) => s.name)
             return { ...campaign, staff_names: assignedNames }
           } catch {
             return { ...campaign, staff_names: [] }
@@ -99,29 +121,40 @@ export default function CampaignsPage() {
       )
 
       setCampaigns(campaignsWithStaff)
-    } catch (err: any) {
-      setError(err.message)
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to fetch campaigns'))
     } finally {
       setLoading(false)
     }
-  }
+  }, [getToken, orgUrl, selectedOrganizationId])
+
+  useEffect(() => {
+    if (isLoaded && userId && selectedOrganizationId) {
+      const timer = window.setTimeout(() => {
+        void loadCampaigns()
+      }, 0)
+      return () => window.clearTimeout(timer)
+    }
+  }, [isLoaded, userId, selectedOrganizationId, loadCampaigns])
 
   const handleDelete = async (id: number) => {
+    if (!canManageCampaigns) return
     if (!confirm('Are you sure you want to delete this campaign?')) return
     try {
       const token = await getToken()
-      const res = await fetch(`${API_BASE}/api/campaigns/${id}`, {
+      const res = await fetch(orgUrl(`${API_BASE}/api/campaigns/${id}`), {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${token}` }
       })
       if (!res.ok) throw new Error('Failed to delete')
       setCampaigns(campaigns.filter(c => c.id !== id))
-    } catch (err: any) {
-      alert(err.message)
+    } catch (err: unknown) {
+      alert(getErrorMessage(err, 'Failed to delete'))
     }
   }
 
   const openCreateModal = () => {
+    if (!canManageCampaigns) return
     setEditingCampaign(null)
     setFormData({
       name: '',
@@ -132,12 +165,14 @@ export default function CampaignsPage() {
       max_leads_per_campaign: '',
       lead_selection_order: 'newest_first',
       auto_approve_drafts: false,
+      auto_approve_monitor_replies: false,
       max_emails_per_lead: 5
     })
     setIsModalOpen(true)
   }
 
   const openEditModal = (campaign: Campaign) => {
+    if (!canManageCampaigns) return
     setEditingCampaign(campaign)
     setFormData({
       name: campaign.name,
@@ -148,6 +183,7 @@ export default function CampaignsPage() {
       max_leads_per_campaign: campaign.max_leads_per_campaign?.toString() || '',
       lead_selection_order: campaign.lead_selection_order,
       auto_approve_drafts: campaign.auto_approve_drafts,
+      auto_approve_monitor_replies: campaign.auto_approve_monitor_replies,
       max_emails_per_lead: campaign.max_emails_per_lead
     })
     setIsModalOpen(true)
@@ -155,18 +191,19 @@ export default function CampaignsPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (!canManageCampaigns) return
     try {
       const token = await getToken()
       const payload = {
         ...formData,
         max_leads_per_campaign: formData.max_leads_per_campaign ? parseInt(formData.max_leads_per_campaign) : null,
-        meeting_delay_days: parseInt(formData.meeting_delay_days as any),
-        max_emails_per_lead: parseInt(formData.max_emails_per_lead as any)
+        meeting_delay_days: formData.meeting_delay_days,
+        max_emails_per_lead: formData.max_emails_per_lead
       }
 
       const url = editingCampaign 
-        ? `${API_BASE}/api/campaigns/${editingCampaign.id}`
-        : `${API_BASE}/api/campaigns`
+        ? orgUrl(`${API_BASE}/api/campaigns/${editingCampaign.id}`)
+        : orgUrl(`${API_BASE}/api/campaigns`)
         
       const res = await fetch(url, {
         method: editingCampaign ? 'PUT' : 'POST',
@@ -193,8 +230,8 @@ export default function CampaignsPage() {
       
       await loadCampaigns()
       setIsModalOpen(false)
-    } catch (err: any) {
-      alert(err.message)
+    } catch (err: unknown) {
+      alert(getErrorMessage(err, 'Failed to save campaign'))
     }
   }
 
@@ -203,16 +240,16 @@ export default function CampaignsPage() {
       setLeadCampaign(campaign)
       setIsLeadsModalOpen(true)
       const token = await getToken()
-      const res = await fetch(`${API_BASE}/api/campaigns/${campaign.id}/leads`, {
+      const res = await fetch(orgUrl(`${API_BASE}/api/campaigns/${campaign.id}/leads`), {
         headers: { 'Authorization': `Bearer ${token}` }
       })
       if (!res.ok) throw new Error('Failed to load campaign leads')
-      const data = await res.json()
+      const data = await res.json() as { leads?: CampaignLead[] }
       const leads: CampaignLead[] = data.leads || []
       setCampaignLeads(leads)
       setSelectedLeadIds(leads.filter(l => !!l.assigned).map(l => l.id))
-    } catch (err: any) {
-      alert(err.message)
+    } catch (err: unknown) {
+      alert(getErrorMessage(err, 'Failed to load campaign leads'))
       setIsLeadsModalOpen(false)
     }
   }
@@ -222,11 +259,11 @@ export default function CampaignsPage() {
   }
 
   const saveLeadAssignments = async () => {
-    if (!leadCampaign) return
+    if (!leadCampaign || !canManageCampaigns) return
     try {
       setLeadsSaving(true)
       const token = await getToken()
-      const res = await fetch(`${API_BASE}/api/campaigns/${leadCampaign.id}/leads`, {
+      const res = await fetch(orgUrl(`${API_BASE}/api/campaigns/${leadCampaign.id}/leads`), {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -236,10 +273,85 @@ export default function CampaignsPage() {
       })
       if (!res.ok) throw new Error('Failed to save lead assignments')
       setIsLeadsModalOpen(false)
-    } catch (err: any) {
-      alert(err.message)
+    } catch (err: unknown) {
+      alert(getErrorMessage(err, 'Failed to save lead assignments'))
     } finally {
       setLeadsSaving(false)
+    }
+  }
+
+  const openSequenceModal = async (campaign: Campaign) => {
+    try {
+      setSequenceCampaign(campaign)
+      setIsSequenceModalOpen(true)
+      const token = await getToken()
+      const res = await fetch(orgUrl(`${API_BASE}/api/campaigns/${campaign.id}/sequence`), {
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      if (!res.ok) throw new Error('Failed to load follow-up sequence')
+      const data = await res.json() as { steps?: SequenceStep[] }
+      setSequenceSteps((data.steps || []).map(step => ({ ...step, active: !!step.active })))
+    } catch (err: unknown) {
+      alert(getErrorMessage(err, 'Failed to load follow-up sequence'))
+      setIsSequenceModalOpen(false)
+    }
+  }
+
+  const updateSequenceStep = (index: number, updates: Partial<SequenceStep>) => {
+    setSequenceSteps(current => current.map((step, i) => i === index ? { ...step, ...updates } : step))
+  }
+
+  const addSequenceStep = () => {
+    const next = Math.max(0, ...sequenceSteps.map(step => Number(step.step_number) || 0)) + 1
+    setSequenceSteps(current => [...current, {
+      step_number: next,
+      delay_days: 3,
+      subject_template: 'Re: {campaign_name}',
+      body_template: 'Hi {name},\n\nFollowing up on my previous note about {value_proposition}.\n\n{cta}\n\nBest,\n{sender_name}',
+      active: true,
+    }])
+  }
+
+  const saveSequence = async () => {
+    if (!sequenceCampaign || !canManageCampaigns) return
+    try {
+      setSequenceSaving(true)
+      const token = await getToken()
+      const res = await fetch(orgUrl(`${API_BASE}/api/campaigns/${sequenceCampaign.id}/sequence`), {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ steps: sequenceSteps.map(step => ({ ...step, active: !!step.active })) })
+      })
+      if (!res.ok) throw new Error('Failed to save follow-up sequence')
+      setIsSequenceModalOpen(false)
+    } catch (err: unknown) {
+      alert(getErrorMessage(err, 'Failed to save follow-up sequence'))
+    } finally {
+      setSequenceSaving(false)
+    }
+  }
+
+  const exportCampaignResults = async (campaign: Campaign) => {
+    try {
+      const token = await getToken()
+      const res = await fetch(orgUrl(`${API_BASE}/api/campaigns/${campaign.id}/results/export.csv`), {
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      if (!res.ok) throw new Error('Export failed')
+      const blob = await res.blob()
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `campaign-${campaign.id}-results.csv`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(url)
+    } catch (err: unknown) {
+      alert(getErrorMessage(err, 'Failed to export campaign results'))
     }
   }
 
@@ -248,31 +360,14 @@ export default function CampaignsPage() {
   }
 
   return (
-    <div className="flex flex-col min-h-screen bg-zinc-50 dark:bg-zinc-950">
-      <header className="flex items-center justify-between px-8 py-4 bg-white border-b border-zinc-200 dark:bg-zinc-900 dark:border-zinc-800">
-        <div className="flex items-center gap-6">
-          <h1 className="text-xl font-bold text-zinc-900 dark:text-zinc-50">Shiku SDR</h1>
-          <nav className="flex gap-4">
-            <Link href="/" className="text-sm text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100">Dashboard</Link>
-            <Link href="/campaigns" className="text-sm font-medium text-zinc-900 dark:text-zinc-100">Campaigns</Link>
-            <Link href="/leads" className="text-sm text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100">Leads</Link>
-            <Link href="/drafts" className="text-sm text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100">Drafts</Link>
-            <Link href="/staff" className="text-sm text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100">Staff</Link>
-          </nav>
-        </div>
-        <div className="flex items-center gap-4">
-          <ClerkLoaded>
-            <UserButton />
-          </ClerkLoaded>
-        </div>
-      </header>
-
+    <AppShell active="campaigns">
       <main className="flex-1 max-w-6xl mx-auto w-full p-8">
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-2xl font-bold text-zinc-900 dark:text-zinc-50">Campaigns</h2>
           <button 
             onClick={openCreateModal}
-            className="px-4 py-2 bg-zinc-900 text-white rounded-md text-sm font-medium hover:bg-zinc-800 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
+            disabled={!canManageCampaigns}
+            className="px-4 py-2 bg-zinc-900 text-white rounded-md text-sm font-medium hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
           >
             Create Campaign
           </button>
@@ -290,6 +385,7 @@ export default function CampaignsPage() {
                   <th className="px-6 py-3 font-medium">Name</th>
                   <th className="px-6 py-3 font-medium">Status</th>
                   <th className="px-6 py-3 font-medium">Assigned Staff</th>
+                  <th className="px-6 py-3 font-medium">Approval</th>
                   <th className="px-6 py-3 font-medium">Leads Cap</th>
                   <th className="px-6 py-3 font-medium">Delay Days</th>
                   <th className="px-6 py-3 font-medium text-right">Actions</th>
@@ -314,6 +410,22 @@ export default function CampaignsPage() {
                     <td className="px-6 py-4 text-zinc-600 dark:text-zinc-400">
                       {camp.staff_names && camp.staff_names.length > 0 ? camp.staff_names.join(', ') : 'No staff assigned'}
                     </td>
+                    <td className="px-6 py-4">
+                      <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                        camp.auto_approve_drafts
+                          ? 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300'
+                          : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+                      }`}>
+                        Outreach: {camp.auto_approve_drafts ? 'auto-send' : 'review'}
+                      </span>
+                      <span className={`mt-1 inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                        camp.auto_approve_monitor_replies
+                          ? 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300'
+                          : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+                      }`}>
+                        Replies: {camp.auto_approve_monitor_replies ? 'auto-send' : 'review'}
+                      </span>
+                    </td>
                     <td className="px-6 py-4 text-zinc-600 dark:text-zinc-400">
                       {camp.max_leads_per_campaign || 'Unlimited'}
                     </td>
@@ -321,15 +433,17 @@ export default function CampaignsPage() {
                       {camp.meeting_delay_days}
                     </td>
                     <td className="px-6 py-4 text-right">
-                      <button onClick={() => openEditModal(camp)} className="text-blue-600 hover:text-blue-800 dark:text-blue-400 mr-4 font-medium">Edit</button>
+                      <button disabled={!canManageCampaigns} onClick={() => openEditModal(camp)} className="text-blue-600 hover:text-blue-800 disabled:opacity-50 dark:text-blue-400 mr-4 font-medium">Edit</button>
                       <button onClick={() => openLeadsModal(camp)} className="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 mr-4 font-medium">Manage Leads</button>
-                      <button onClick={() => handleDelete(camp.id)} className="text-red-600 hover:text-red-800 dark:text-red-400 font-medium">Delete</button>
+                      <button onClick={() => openSequenceModal(camp)} className="text-emerald-600 hover:text-emerald-800 dark:text-emerald-400 mr-4 font-medium">Sequence</button>
+                      <button onClick={() => exportCampaignResults(camp)} className="text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 mr-4 font-medium">Export</button>
+                      <button disabled={!canManageCampaigns} onClick={() => handleDelete(camp.id)} className="text-red-600 hover:text-red-800 disabled:opacity-50 dark:text-red-400 font-medium">Delete</button>
                     </td>
                   </tr>
                 ))}
                 {campaigns.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="px-6 py-8 text-center text-zinc-500">
+                    <td colSpan={7} className="px-6 py-8 text-center text-zinc-500">
                       No campaigns found. Create one to get started.
                     </td>
                   </tr>
@@ -407,8 +521,21 @@ export default function CampaignsPage() {
                 <div className="col-span-2 mt-2">
                   <label className="flex items-center gap-2 text-sm font-medium text-zinc-700 dark:text-zinc-300">
                     <input type="checkbox" checked={formData.auto_approve_drafts} onChange={e => setFormData({...formData, auto_approve_drafts: e.target.checked})} className="rounded text-zinc-900 focus:ring-zinc-900" />
-                    Auto-approve email drafts (no HITL)
+                    Send outreach emails without human review
                   </label>
+                  <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                    Controls proactive outbound emails created when you run a campaign. When disabled, outreach drafts wait in Draft Approvals.
+                  </p>
+                </div>
+
+                <div className="col-span-2">
+                  <label className="flex items-center gap-2 text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                    <input type="checkbox" checked={formData.auto_approve_monitor_replies} onChange={e => setFormData({...formData, auto_approve_monitor_replies: e.target.checked})} className="rounded text-zinc-900 focus:ring-zinc-900" />
+                    Send monitored replies without human review
+                  </label>
+                  <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                    Controls AI replies generated after inbound webhook emails for leads in this campaign. When disabled, reply drafts wait in Draft Approvals.
+                  </p>
                 </div>
               </div>
 
@@ -416,7 +543,7 @@ export default function CampaignsPage() {
                 <button type="button" onClick={() => setIsModalOpen(false)} className="px-4 py-2 border border-zinc-300 rounded-md text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
                   Cancel
                 </button>
-                <button type="submit" className="px-4 py-2 bg-zinc-900 text-white rounded-md text-sm font-medium hover:bg-zinc-800 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200">
+                <button type="submit" disabled={!canManageCampaigns} className="px-4 py-2 bg-zinc-900 text-white rounded-md text-sm font-medium hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200">
                   {editingCampaign ? 'Save Changes' : 'Create Campaign'}
                 </button>
               </div>
@@ -474,7 +601,7 @@ export default function CampaignsPage() {
               </button>
               <button
                 type="button"
-                disabled={leadsSaving}
+                disabled={leadsSaving || !canManageCampaigns}
                 onClick={saveLeadAssignments}
                 className="px-4 py-2 bg-zinc-900 text-white rounded-md text-sm font-medium hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
               >
@@ -484,6 +611,91 @@ export default function CampaignsPage() {
           </div>
         </div>
       )}
-    </div>
+
+      {isSequenceModalOpen && sequenceCampaign && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 overflow-y-auto">
+          <div className="bg-white dark:bg-zinc-900 rounded-xl shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col">
+            <div className="px-6 py-4 border-b border-zinc-200 dark:border-zinc-800 flex justify-between items-center">
+              <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100">
+                Follow-up Sequence - {sequenceCampaign.name}
+              </h3>
+              <button onClick={() => setIsSequenceModalOpen(false)} className="text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300">
+                &times;
+              </button>
+            </div>
+            <div className="p-6 overflow-y-auto flex-1 space-y-4">
+              {sequenceSteps.map((step, index) => (
+                <div key={`${step.id || 'new'}-${index}`} className="border border-zinc-200 dark:border-zinc-700 rounded-lg p-4 space-y-3">
+                  <div className="grid grid-cols-1 md:grid-cols-[120px_140px_minmax(0,1fr)_90px] gap-3">
+                    <input
+                      type="number"
+                      min="1"
+                      value={step.step_number}
+                      onChange={(e) => updateSequenceStep(index, { step_number: parseInt(e.target.value) || 1 })}
+                      className="px-3 py-2 border rounded-md dark:bg-zinc-800 dark:border-zinc-700"
+                    />
+                    <input
+                      type="number"
+                      min="1"
+                      value={step.delay_days}
+                      onChange={(e) => updateSequenceStep(index, { delay_days: parseInt(e.target.value) || 1 })}
+                      className="px-3 py-2 border rounded-md dark:bg-zinc-800 dark:border-zinc-700"
+                    />
+                    <input
+                      type="text"
+                      value={step.subject_template}
+                      onChange={(e) => updateSequenceStep(index, { subject_template: e.target.value })}
+                      className="px-3 py-2 border rounded-md dark:bg-zinc-800 dark:border-zinc-700"
+                    />
+                    <label className="flex items-center gap-2 text-sm">
+                      <input type="checkbox" checked={!!step.active} onChange={(e) => updateSequenceStep(index, { active: e.target.checked })} />
+                      Active
+                    </label>
+                  </div>
+                  <textarea
+                    rows={5}
+                    value={step.body_template}
+                    onChange={(e) => updateSequenceStep(index, { body_template: e.target.value })}
+                    className="w-full px-3 py-2 border rounded-md dark:bg-zinc-800 dark:border-zinc-700"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setSequenceSteps(current => current.filter((_, i) => i !== index))}
+                    className="text-sm text-rose-600 dark:text-rose-400"
+                  >
+                    Remove step
+                  </button>
+                </div>
+              ))}
+              {sequenceSteps.length === 0 && <p className="text-sm text-zinc-500">No follow-up steps configured.</p>}
+              <button
+                type="button"
+                onClick={addSequenceStep}
+                className="px-3 py-2 border border-zinc-300 rounded-md text-sm font-medium dark:border-zinc-700"
+              >
+                Add Step
+              </button>
+            </div>
+            <div className="px-6 py-4 border-t border-zinc-200 dark:border-zinc-800 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setIsSequenceModalOpen(false)}
+                className="px-4 py-2 border border-zinc-300 rounded-md text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={sequenceSaving || !canManageCampaigns}
+                onClick={saveSequence}
+                className="px-4 py-2 bg-zinc-900 text-white rounded-md text-sm font-medium hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
+              >
+                {sequenceSaving ? 'Saving...' : 'Save Sequence'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </AppShell>
   )
 }

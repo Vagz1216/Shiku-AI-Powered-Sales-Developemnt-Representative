@@ -1,20 +1,118 @@
-"""Email reply tool using AgentMail."""
+"""Email reply tool using the configured email provider."""
 
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import logging
 from agentmail import AgentMail
 
 from config.logging import setup_logging
 from config import settings
 from agents import function_tool
+from services.mailbox_transport import send_mailbox_reply
+from services.resend_email import send_resend_reply
 
 # Setup logging
 setup_logging()
 logger = logging.getLogger(__name__)
 
 
+def campaign_auto_approves_monitor_replies(campaign_id: Optional[int]) -> bool:
+    """Return True when this campaign skips approval for webhook replies."""
+    if not campaign_id:
+        return False
+    try:
+        from utils.db_connection import get_conn
+
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT auto_approve_monitor_replies FROM campaigns WHERE id = ?",
+                (campaign_id,),
+            ).fetchone()
+            return bool(row and row["auto_approve_monitor_replies"])
+    except Exception as e:
+        logger.warning(f"Could not resolve monitor approval setting for campaign {campaign_id}: {e}")
+        return False
+
+
+def campaign_organization_id(campaign_id: Optional[int]) -> int | None:
+    if not campaign_id:
+        return None
+    try:
+        from utils.db_connection import get_conn
+
+        with get_conn() as conn:
+            row = conn.execute("SELECT organization_id FROM campaigns WHERE id = ?", (campaign_id,)).fetchone()
+            return int(row["organization_id"]) if row and row["organization_id"] is not None else None
+    except Exception as e:
+        logger.warning(f"Could not resolve organization for campaign {campaign_id}: {e}")
+        return None
+
+
+def save_reply_draft(
+    to_email: str,
+    message: str,
+    thread_id: Optional[str] = None,
+    subject: Optional[str] = None,
+    campaign_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Save an inbound-monitor reply as a local draft awaiting approval."""
+    from utils.db_connection import get_conn
+    import datetime
+
+    conn = get_conn()
+    try:
+        with conn:
+            organization_id = campaign_organization_id(campaign_id)
+            if organization_id:
+                cur = conn.execute(
+                    "SELECT id, organization_id FROM leads WHERE email = ? AND organization_id = ?",
+                    (to_email, organization_id),
+                )
+            else:
+                cur = conn.execute("SELECT id, organization_id FROM leads WHERE email = ?", (to_email,))
+            row = cur.fetchone()
+            lead_id = row['id'] if row else None
+            resolved_campaign_id = campaign_id
+            if lead_id and not resolved_campaign_id:
+                campaign_row = conn.execute(
+                    "SELECT campaign_id FROM campaign_leads WHERE lead_id = ? ORDER BY campaign_id DESC LIMIT 1",
+                    (lead_id,),
+                ).fetchone()
+                resolved_campaign_id = campaign_row["campaign_id"] if campaign_row else None
+                organization_id = campaign_organization_id(resolved_campaign_id)
+            if lead_id and organization_id is None:
+                lead_row = conn.execute("SELECT organization_id FROM leads WHERE id = ?", (lead_id,)).fetchone()
+                organization_id = lead_row["organization_id"] if lead_row else None
+
+            now_iso = datetime.datetime.utcnow().isoformat() + 'Z'
+            cur = conn.execute(
+                "INSERT INTO email_messages "
+                "(organization_id, lead_id, campaign_id, direction, subject, body, status, processed, approved, created_at) "
+                "VALUES (?, ?, ?, 'outbound', ?, ?, 'DRAFT', 1, 0, ?)",
+                (organization_id or 1, lead_id, resolved_campaign_id, subject or "Re: Your Message", message, now_iso)
+            )
+            draft_id = cur.lastrowid
+        logger.info(f"Saved reply draft to {to_email} due to email monitor human approval")
+        return {
+            'success': True,
+            'message_id': f"draft:{draft_id}" if draft_id else "draft",
+            'thread_id': thread_id or "draft",
+            'draft_id': draft_id,
+            'method': 'draft',
+        }
+    except Exception as e:
+        logger.error(f"Failed to save draft: {e}")
+        return {'success': False, 'error': f"Failed to save draft: {e}"}
+
+
 @function_tool
-def send_reply_email(to_email: str, message: str, message_id: str = None, thread_id: str = None, subject: str = None) -> Dict[str, Any]:
+def send_reply_email(
+    to_email: str,
+    message: str,
+    message_id: Optional[str] = None,
+    thread_id: Optional[str] = None,
+    subject: Optional[str] = None,
+    campaign_id: Optional[int] = None,
+) -> Dict[str, Any]:
     """Send email reply via AgentMail using proper reply API.
     
     Args:
@@ -23,6 +121,7 @@ def send_reply_email(to_email: str, message: str, message_id: str = None, thread
         message_id: Original message ID to reply to (preferred for proper threading)
         thread_id: Thread ID for context (fallback option)
         subject: Email subject line (optional, auto-generated for replies)
+        campaign_id: Campaign context for draft visibility when human approval is required
         
     Returns:
         Dict with send result
@@ -32,33 +131,31 @@ def send_reply_email(to_email: str, message: str, message_id: str = None, thread
         if message and isinstance(message, str):
             message = message.replace('\\n', '\n')
             
-        if settings.require_human_approval:
-            from utils.db_connection import get_conn
-            import datetime
-            conn = get_conn()
-            try:
-                with conn:
-                    # Find lead_id
-                    cur = conn.execute("SELECT id FROM leads WHERE email = ?", (to_email,))
-                    row = cur.fetchone()
-                    lead_id = row['id'] if row else None
-                    
-                    # Save as draft
-                    now_iso = datetime.datetime.utcnow().isoformat() + 'Z'
-                    conn.execute(
-                        "INSERT INTO email_messages (lead_id, direction, subject, body, status, processed, created_at) VALUES (?, 'outbound', ?, ?, 'draft', 1, ?)",
-                        (lead_id, subject or "Re: Your Message", message, now_iso)
-                    )
-                logger.info(f"Saved reply draft to {to_email} due to require_human_approval=True")
-                return {
-                    'success': True,
-                    'message_id': "draft",
-                    'thread_id': "draft",
-                    'method': 'draft'
-                }
-            except Exception as e:
-                logger.error(f"Failed to save draft: {e}")
-                return {'success': False, 'error': f"Failed to save draft: {e}"}
+        if (
+            settings.effective_email_monitor_human_approval
+            and not campaign_auto_approves_monitor_replies(campaign_id)
+        ):
+            return save_reply_draft(to_email, message, thread_id=thread_id, subject=subject, campaign_id=campaign_id)
+
+        if settings.email_provider == "mailbox":
+            organization_id = campaign_organization_id(campaign_id)
+            logger.info(f"Sending reply to {to_email} via connected mailbox")
+            return send_mailbox_reply(
+                to_email=to_email,
+                message=message,
+                message_id=message_id,
+                subject=subject,
+                organization_id=organization_id,
+            )
+
+        if settings.email_provider == "resend":
+            logger.info(f"Sending reply to {to_email} via Resend")
+            return send_resend_reply(
+                to_email=to_email,
+                message=message,
+                message_id=message_id,
+                subject=subject,
+            )
 
         client = AgentMail(api_key=settings.agentmail_api_key)
         

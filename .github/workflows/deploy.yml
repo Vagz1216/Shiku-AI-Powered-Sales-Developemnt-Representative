@@ -1,0 +1,68 @@
+name: Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy_frontend:
+    name: Deploy frontend to Vercel
+    runs-on: ubuntu-latest
+    env:
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      NEXT_PUBLIC_API_URL: ${{ secrets.NEXT_PUBLIC_API_URL }}
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Skip when Vercel secrets are missing
+        if: env.VERCEL_ORG_ID == '' || env.VERCEL_PROJECT_ID == '' || env.VERCEL_TOKEN == '' || env.NEXT_PUBLIC_API_URL == '' || env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY == ''
+        run: |
+          echo "::notice::Skipping Vercel deploy. Configure VERCEL_ORG_ID, VERCEL_PROJECT_ID, VERCEL_TOKEN, NEXT_PUBLIC_API_URL, and NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY repository secrets."
+
+      - uses: actions/setup-node@v4
+        if: env.VERCEL_ORG_ID != '' && env.VERCEL_PROJECT_ID != '' && env.VERCEL_TOKEN != '' && env.NEXT_PUBLIC_API_URL != '' && env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY != ''
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+        if: env.VERCEL_ORG_ID != '' && env.VERCEL_PROJECT_ID != '' && env.VERCEL_TOKEN != '' && env.NEXT_PUBLIC_API_URL != '' && env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY != ''
+
+      - name: Pull Vercel project settings
+        if: env.VERCEL_ORG_ID != '' && env.VERCEL_PROJECT_ID != '' && env.VERCEL_TOKEN != '' && env.NEXT_PUBLIC_API_URL != '' && env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY != ''
+        run: npx vercel@latest pull --yes --environment=production --token="$VERCEL_TOKEN"
+
+      - name: Build Vercel output
+        if: env.VERCEL_ORG_ID != '' && env.VERCEL_PROJECT_ID != '' && env.VERCEL_TOKEN != '' && env.NEXT_PUBLIC_API_URL != '' && env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY != ''
+        run: npx vercel@latest build --prod --token="$VERCEL_TOKEN"
+
+      - name: Deploy prebuilt output
+        if: env.VERCEL_ORG_ID != '' && env.VERCEL_PROJECT_ID != '' && env.VERCEL_TOKEN != '' && env.NEXT_PUBLIC_API_URL != '' && env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY != ''
+        run: npx vercel@latest deploy --prebuilt --prod --token="$VERCEL_TOKEN"
+
+  deploy_backend:
+    name: Trigger Render API deploy
+    runs-on: ubuntu-latest
+    env:
+      RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+    steps:
+      - name: Skip when Render deploy hook is missing
+        if: env.RENDER_DEPLOY_HOOK_URL == ''
+        run: |
+          echo "::notice::Skipping Render deploy. Configure the RENDER_DEPLOY_HOOK_URL repository secret."
+
+      - name: Trigger Render deploy
+        if: env.RENDER_DEPLOY_HOOK_URL != ''
+        run: curl -fsS -X POST "$RENDER_DEPLOY_HOOK_URL"

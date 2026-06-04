@@ -9,7 +9,7 @@ class LeadProvider(ABC):
     """
 
     @abstractmethod
-    def get_leads(self, campaign_id: Optional[int] = None, max_leads: Optional[int] = None, order_by: str = 'newest_first') -> Dict[str, Any]:
+    def get_leads(self, campaign_id: Optional[int] = None, max_leads: Optional[int] = None, order_by: str = 'newest_first', organization_id: Optional[int] = None) -> Dict[str, Any]:
         """Get leads eligible for outreach."""
         pass
 

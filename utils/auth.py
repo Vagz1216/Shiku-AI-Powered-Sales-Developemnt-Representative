@@ -66,6 +66,7 @@ class ClerkAuth:
                 algorithms=["RS256"],
                 options={"verify_aud": False} # Clerk uses dynamic audiences sometimes
             )
+            payload = await self.enrich_payload(payload)
             return payload
         except JWTError as e:
             logger.error(f"JWT verification failed: {e}")
@@ -73,6 +74,38 @@ class ClerkAuth:
         except Exception as e:
             logger.error(f"Unexpected error during auth: {e}")
             return None
+
+    async def enrich_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Populate email/name from Clerk when the session JWT omits them."""
+        if payload.get("email") or not CLERK_SECRET_KEY or not payload.get("sub"):
+            return payload
+
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                response = await client.get(
+                    f"https://api.clerk.com/v1/users/{payload['sub']}",
+                    headers={"Authorization": f"Bearer {CLERK_SECRET_KEY}"},
+                )
+            if response.status_code >= 400:
+                logger.warning("Could not enrich Clerk user payload: %s", response.status_code)
+                return payload
+
+            user_data = response.json()
+            primary_id = user_data.get("primary_email_address_id")
+            emails = user_data.get("email_addresses") or []
+            primary = next((item for item in emails if item.get("id") == primary_id), None)
+            primary = primary or (emails[0] if emails else None)
+            email = primary.get("email_address") if primary else None
+            if email:
+                payload["email"] = email
+            name = " ".join(
+                part for part in [user_data.get("first_name"), user_data.get("last_name")] if part
+            ).strip()
+            if name:
+                payload["name"] = name
+        except Exception as e:
+            logger.warning("Failed to enrich Clerk user payload: %s", e)
+        return payload
 
 clerk_auth = ClerkAuth()
 
@@ -99,3 +132,16 @@ async def get_current_user(request: Request, auth: Optional[HTTPAuthorizationCre
             headers={"WWW-Authenticate": "Bearer"},
         )
     return payload
+
+
+async def get_current_user_or_cron(
+    request: Request,
+    auth: Optional[HTTPAuthorizationCredentials] = Depends(security),
+):
+    """Allow either a Clerk user token or a trusted scheduler secret."""
+    from config.settings import settings
+
+    cron_secret = request.headers.get("X-Cron-Secret")
+    if settings.cron_secret and cron_secret and cron_secret == settings.cron_secret:
+        return {"sub": "scheduler", "email": None, "name": "Scheduler", "cron": True}
+    return await get_current_user(request, auth)

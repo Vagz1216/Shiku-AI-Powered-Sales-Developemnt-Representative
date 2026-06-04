@@ -1,4 +1,4 @@
-# Simple Dockerfile for Hugging Face Spaces
+# Dockerfile for the FastAPI API service.
 FROM python:3.12-slim AS builder
 
 # Install uv for fast dependency management
@@ -7,8 +7,8 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/
 WORKDIR /app
 
 # Copy and install dependencies
-COPY pyproject.toml ./
-RUN uv sync --no-dev
+COPY pyproject.toml uv.lock ./
+RUN uv sync --no-dev --frozen
 
 # Copy source code
 COPY . .
@@ -35,4 +35,4 @@ USER user
 
 # Expose port and run
 EXPOSE 8000
-CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "python -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]

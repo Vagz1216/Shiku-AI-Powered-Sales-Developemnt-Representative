@@ -161,7 +161,7 @@ Use this as your script/reference during the demo. Each section maps to a rubric
 
 > "Observability is built on three pillars:
 >
-> 1. **OpenAI Traces** — every agent run, tool call, and LLM generation is automatically traced with the OpenAI Agents SDK. I configured a **separate tracing API key** so I can view traces in my own OpenAI dashboard even when using a different key for LLM calls. Each trace shows the full pipeline hierarchy: Monitor → LlamaGuard → IntentExtractor → ResponseAgent → Evaluator → SenderAgent → (tool calls).
+> 1. **OpenAI Traces** — every agent run, tool call, and LLM generation is automatically traced with the OpenAI Agents SDK using the standard OpenAI API key. Each trace shows the full pipeline hierarchy: Monitor → LlamaGuard → IntentExtractor → ResponseAgent → Evaluator → SenderAgent → (tool calls).
 >
 > 2. **Structured JSON logs** — rotating file logs with contextual fields, queryable with `jq`. Every stage logs provider used, response times, and outcomes.
 >

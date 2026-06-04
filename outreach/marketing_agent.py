@@ -11,7 +11,7 @@ from agents import trace, gen_trace_id
 from tools.campaign_tools import fetch_campaign_info
 from tools.send_email import send_plain_email
 from outreach.workers import run_drafter_agent, run_reviewer_agent
-from services import lead_service
+from services import campaign_context_service, lead_service, metering_service
 from utils.quick_replies import (
     quick_replies_for_outreach,
     quick_replies_html_for_outreach,
@@ -31,6 +31,7 @@ class OutreachOrchestrator:
     async def execute_campaign(
         self, 
         campaign_name: Optional[str] = None,
+        organization_id: int | None = None,
         callback: Optional[SSECallback] = None
     ) -> Dict[str, Any]:
         """Execute a complete database-driven outreach campaign via Worker Agents."""
@@ -44,18 +45,28 @@ class OutreachOrchestrator:
             with trace(
                 workflow_name="Outreach Campaign Orchestrator Pipeline",
                 trace_id=trace_id,
-                metadata={"campaign": campaign_name or "random_active"}
+                    metadata={"campaign": campaign_name or "random_active", "organization_id": organization_id}
             ):
                 # 1. Get Campaign
                 msg = "Fetching campaign details..."
                 logger.info(msg)
                 if callback: await callback("info", msg)
                 
-                campaign = fetch_campaign_info(campaign_name=campaign_name)
+                campaign = fetch_campaign_info(campaign_name=campaign_name, organization_id=organization_id)
                 if not campaign:
                     err_msg = "No active campaign found"
                     if callback: await callback("error", err_msg)
                     return {"success": False, "error": err_msg}
+                campaign_org_id = getattr(campaign, "organization_id", organization_id or 1)
+
+                approval_msg = (
+                    "Approval mode: auto-send enabled for this campaign; human draft approval will be skipped."
+                    if campaign.auto_approve_drafts
+                    else "Approval mode: human review required; emails will be saved in Draft Approvals."
+                )
+                logger.info(approval_msg)
+                if callback:
+                    await callback("info", approval_msg)
                 
                 # 2. Get campaign-scoped eligible leads
                 requested_max = campaign.max_leads_per_campaign or settings.max_leads_per_campaign
@@ -68,6 +79,7 @@ class OutreachOrchestrator:
                     campaign_id=campaign.id,
                     max_leads=batch_size,
                     order_by=campaign.lead_selection_order,
+                    organization_id=campaign_org_id,
                 )
                 if not lead_res.get("success"):
                     err_msg = f"Failed to get eligible leads: {lead_res.get('error')}"
@@ -87,6 +99,7 @@ class OutreachOrchestrator:
                     "tone": settings.tone,
                     "sender_name": settings.outreach_sender_name,
                     "sender_company": settings.outreach_sender_company,
+                    "organization_id": campaign_org_id,
                 }
                 sent_count = 0
                 draft_count = 0
@@ -112,99 +125,173 @@ class OutreachOrchestrator:
                         await callback("info", progress_msg)
 
                     try:
-                        drafts = await run_drafter_agent(camp_info, lead_info)
-                        review_result = await run_reviewer_agent(camp_info, lead_info, drafts)
+                        with metering_service.ai_usage_action_context(
+                            organization_id=campaign_org_id,
+                            action_type="outreach_email_generation",
+                            credits_used=6,
+                            source_object_type="lead",
+                            source_object_id=lead_data.get("id"),
+                            metadata={
+                                "campaign_id": campaign.id,
+                                "campaign_name": campaign.name,
+                                "lead_email": lead_info["email"],
+                                "auto_approve_drafts": bool(campaign.auto_approve_drafts),
+                            },
+                        ) as usage_action:
+                            drafts = await run_drafter_agent(camp_info, lead_info)
+                            review_result = await run_reviewer_agent(camp_info, lead_info, drafts)
 
-                        if campaign.auto_approve_drafts:
-                            body_with_qr = review_result.body + quick_replies_for_outreach(
-                                review_result.subject,
-                                lead_email=lead_info["email"],
-                                campaign_id=campaign.id,
-                            )
-                            html_body = plain_text_to_basic_html(review_result.body) + quick_replies_html_for_outreach(
-                                review_result.subject,
-                                lead_email=lead_info["email"],
-                                campaign_id=campaign.id,
-                            )
-                            send_res = await send_plain_email(
-                                email=lead_info["email"],
-                                name=lead_info["name"],
-                                subject=review_result.subject,
-                                body=body_with_qr,
-                                html_body=html_body,
-                            )
-                            if send_res.ok:
+                            if campaign.auto_approve_drafts:
+                                html_body = plain_text_to_basic_html(review_result.body) + quick_replies_html_for_outreach(
+                                    review_result.subject,
+                                    lead_email=lead_info["email"],
+                                    campaign_id=campaign.id,
+                                    organization_id=campaign_org_id,
+                                )
+                                send_res = await send_plain_email(
+                                    email=lead_info["email"],
+                                    name=lead_info["name"],
+                                    subject=review_result.subject,
+                                    body=review_result.body,
+                                    html_body=html_body,
+                                    bypass_human_approval=True,
+                                    organization_id=campaign_org_id,
+                                )
+                                if send_res.ok:
+                                    metering_service.update_ai_usage_action(
+                                        usage_action.get("id"),
+                                        action_type="outreach_email_sent",
+                                        metadata_patch={
+                                            "selected_draft_type": review_result.selected_draft_type,
+                                            "subject": review_result.subject,
+                                            "message_id": send_res.message_id,
+                                        },
+                                    )
+                                    metering_service.record_platform_usage_event(
+                                        organization_id=campaign_org_id,
+                                        event_type="email_sent",
+                                        source_object_type="lead",
+                                        source_object_id=lead_data.get("id"),
+                                        metadata={"campaign_id": campaign.id, "channel": "outreach"},
+                                    )
+                                else:
+                                    metering_service.update_ai_usage_action(
+                                        usage_action.get("id"),
+                                        action_type="outreach_email_send_failed",
+                                        status="error",
+                                        metadata_patch={"error": send_res.error},
+                                    )
+                                if send_res.ok:
+                                    try:
+                                        from utils.db_connection import get_conn
+                                        with get_conn() as conn:
+                                            conn.execute(
+                                                "INSERT INTO email_messages (organization_id, lead_id, campaign_id, direction, subject, body, status, approved) VALUES (?, ?, ?, 'outbound', ?, ?, 'SENT', 1)",
+                                                (campaign_org_id, lead_data.get("id"), campaign.id, review_result.subject, review_result.body)
+                                            )
+                                            campaign_context_service.record_outbound(
+                                                conn,
+                                                organization_id=campaign_org_id,
+                                                campaign_id=campaign.id,
+                                                lead_id=lead_data.get("id"),
+                                                subject=review_result.subject,
+                                                body=review_result.body,
+                                            )
+                                    except Exception as e:
+                                        logger.error(f"Failed to log sent email to database: {e}")
+
+                                    lead_id = lead_data.get("id")
+                                    if lead_id:
+                                        lead_service.update_lead_touch(lead_id, campaign.id)
+                                        # Prevent downgrading warm/qualified/meeting states back to CONTACTED
+                                        if (lead_data.get("status") or "").upper() in {"NEW", "COLD", ""}:
+                                            lead_service.update_lead_status(lead_id, "CONTACTED")
+
+                                    sent_count += 1
+                                    processed += 1
+                                    run_records.append({
+                                        "lead_email": lead_info["email"],
+                                        "lead_name": lead_info["name"],
+                                        "status": "sent",
+                                        "subject": review_result.subject,
+                                        "selected_draft_type": review_result.selected_draft_type,
+                                    })
+                                    if callback:
+                                        await callback("success", f"Auto-approved and sent '{review_result.selected_draft_type}' draft to {lead_info['email']}")
+                                else:
+                                    failed_count += 1
+                                    run_records.append({
+                                        "lead_email": lead_info["email"],
+                                        "lead_name": lead_info["name"],
+                                        "status": "failed",
+                                        "error": send_res.error,
+                                    })
+                                    if callback:
+                                        await callback("error", f"Email delivery failed for {lead_info['email']}: {send_res.error}")
+                            else:
                                 try:
                                     from utils.db_connection import get_conn
                                     with get_conn() as conn:
-                                        conn.execute(
-                                            "INSERT INTO email_messages (lead_id, campaign_id, direction, subject, body, status, approved) VALUES (?, ?, 'outbound', ?, ?, 'SENT', 1)",
-                                            (lead_data.get("id"), campaign.id, review_result.subject, review_result.body)
+                                        cur = conn.execute(
+                                            "INSERT INTO email_messages (organization_id, lead_id, campaign_id, direction, subject, body, status, approved) VALUES (?, ?, ?, 'outbound', ?, ?, 'DRAFT', 0)",
+                                            (campaign_org_id, lead_data.get("id"), campaign.id, review_result.subject, review_result.body)
                                         )
-                                except Exception as e:
-                                    logger.error(f"Failed to log sent email to database: {e}")
-
-                                lead_id = lead_data.get("id")
-                                if lead_id:
-                                    lead_service.update_lead_touch(lead_id, campaign.id)
-                                    # Prevent downgrading warm/qualified/meeting states back to CONTACTED
-                                    if (lead_data.get("status") or "").upper() in {"NEW", "COLD", ""}:
-                                        lead_service.update_lead_status(lead_id, "CONTACTED")
-
-                                sent_count += 1
-                                processed += 1
-                                run_records.append({
-                                    "lead_email": lead_info["email"],
-                                    "lead_name": lead_info["name"],
-                                    "status": "sent",
-                                    "subject": review_result.subject,
-                                    "selected_draft_type": review_result.selected_draft_type,
-                                })
-                                if callback:
-                                    await callback("success", f"Sent '{review_result.selected_draft_type}' draft to {lead_info['email']}")
-                            else:
-                                failed_count += 1
-                                run_records.append({
-                                    "lead_email": lead_info["email"],
-                                    "lead_name": lead_info["name"],
-                                    "status": "failed",
-                                    "error": send_res.error,
-                                })
-                                if callback:
-                                    await callback("error", f"Email delivery failed for {lead_info['email']}: {send_res.error}")
-                        else:
-                            try:
-                                from utils.db_connection import get_conn
-                                with get_conn() as conn:
-                                    conn.execute(
-                                        "INSERT INTO email_messages (lead_id, campaign_id, direction, subject, body, status, approved) VALUES (?, ?, 'outbound', ?, ?, 'DRAFT', 0)",
-                                        (lead_data.get("id"), campaign.id, review_result.subject, review_result.body)
+                                        draft_id = cur.lastrowid
+                                        campaign_context_service.record_outbound(
+                                            conn,
+                                            organization_id=campaign_org_id,
+                                            campaign_id=campaign.id,
+                                            lead_id=lead_data.get("id"),
+                                            subject=review_result.subject,
+                                            body=review_result.body,
+                                        )
+                                    metering_service.update_ai_usage_action(
+                                        usage_action.get("id"),
+                                        action_type="outreach_draft_created",
+                                        metadata_patch={
+                                            "draft_id": draft_id,
+                                            "selected_draft_type": review_result.selected_draft_type,
+                                            "subject": review_result.subject,
+                                        },
                                     )
-                                lead_id = lead_data.get("id")
-                                if lead_id:
-                                    lead_service.update_lead_touch(lead_id, campaign.id)
-                                draft_count += 1
-                                processed += 1
-                                run_records.append({
-                                    "lead_email": lead_info["email"],
-                                    "lead_name": lead_info["name"],
-                                    "status": "draft",
-                                    "subject": review_result.subject,
-                                    "selected_draft_type": review_result.selected_draft_type,
-                                })
-                                if callback:
-                                    await callback("success", f"Saved draft for approval: {lead_info['email']}")
-                            except Exception as e:
-                                failed_count += 1
-                                run_records.append({
-                                    "lead_email": lead_info["email"],
-                                    "lead_name": lead_info["name"],
-                                    "status": "failed",
-                                    "error": str(e),
-                                })
-                                logger.error(f"Failed to save draft to database: {e}")
-                                if callback:
-                                    await callback("error", f"Failed to save draft for {lead_info['email']}: {e}")
+                                    metering_service.record_platform_usage_event(
+                                        organization_id=campaign_org_id,
+                                        event_type="draft_created",
+                                        source_object_type="email_message",
+                                        source_object_id=draft_id,
+                                        metadata={"campaign_id": campaign.id, "lead_id": lead_data.get("id")},
+                                    )
+                                    lead_id = lead_data.get("id")
+                                    if lead_id:
+                                        lead_service.update_lead_touch(lead_id, campaign.id)
+                                    draft_count += 1
+                                    processed += 1
+                                    run_records.append({
+                                        "lead_email": lead_info["email"],
+                                        "lead_name": lead_info["name"],
+                                        "status": "draft",
+                                        "subject": review_result.subject,
+                                        "selected_draft_type": review_result.selected_draft_type,
+                                    })
+                                    if callback:
+                                        await callback("success", f"Saved draft for human approval: {lead_info['email']}")
+                                except Exception as e:
+                                    metering_service.update_ai_usage_action(
+                                        usage_action.get("id"),
+                                        action_type="outreach_draft_create_failed",
+                                        status="error",
+                                        metadata_patch={"error": str(e)},
+                                    )
+                                    failed_count += 1
+                                    run_records.append({
+                                        "lead_email": lead_info["email"],
+                                        "lead_name": lead_info["name"],
+                                        "status": "failed",
+                                        "error": str(e),
+                                    })
+                                    logger.error(f"Failed to save draft to database: {e}")
+                                    if callback:
+                                        await callback("error", f"Failed to save draft for {lead_info['email']}: {e}")
                     except Exception as lead_error:
                         failed_count += 1
                         run_records.append({

@@ -113,17 +113,18 @@ The system uses a multi-provider fallback strategy with provider-specific capabi
 
 | Priority | Provider | Model | Capabilities | Skipped For |
 |----------|----------|-------|-------------|-------------|
-| **1 (Primary)** | OpenAI | `gpt-4o-mini` | Tool calling, structured output, generation | — |
-| 2 | Groq | `llama-3.3-70b-versatile` | Tool calling, generation | Structured output (`json_schema`) |
-| 3 | Cerebras | `llama-3.3-70b` | Structured output, generation | Tool calling |
-| 4+ | OpenRouter | Meta Llama, DeepSeek, Google, Anthropic | Varies | Cross-blacklisted on 402 |
+| **1 (Primary)** | Azure OpenAI | configured deployment | Tool calling, structured output, generation | Requires Azure env vars |
+| 2 | OpenAI | `gpt-4o-mini` | Tool calling, structured output, generation | — |
+| 3 | Groq | `llama-3.3-70b-versatile` | Tool calling, generation | Structured output (`json_schema`) |
+| 4 | Cerebras | `llama-3.3-70b` | Structured output, generation | Tool calling |
+| 5+ | OpenRouter | Meta Llama, DeepSeek, Google, Anthropic | Varies | Cross-blacklisted on 402 |
 
 **Resilience features:**
 - **Multi-key support**: Groq and Cerebras accept comma-separated keys for round-robin fallback
 - **Provider blacklisting**: Fatal errors (quota, TPD limits) trigger 5-minute blacklists
 - **Cross-blacklisting**: OpenRouter providers share credits; one 402 blacklists all
 - **Fast skip**: `max_retries=0` on custom providers, 2-attempt tenacity with short backoff
-- **Separate tracing key**: `OPENAI_TRACING_KEY` env var sends traces to your own OpenAI account
+- **Tracing key**: OpenAI tracing uses the standard `OPENAI_API_KEY` through the Agents SDK default behavior
 
 ## Pipeline Details
 
@@ -211,7 +212,6 @@ Key relationships:
 ```env
 # Core
 OPENAI_API_KEY=sk-...              # Primary LLM provider
-OPENAI_TRACING_KEY=sk-...          # Separate key for traces (optional)
 AGENTMAIL_API_KEY=am_...           # Email sending/receiving
 AGENTMAIL_INBOX_ID=...@agentmail.to
 
@@ -269,7 +269,7 @@ cd /path/to/SDR
 Then set the Ngrok URL as your AgentMail webhook: `https://xxxx.ngrok-free.app/webhook`
 
 ### Viewing Traces
-- Set `OPENAI_TRACING_KEY` in `.env` to your own OpenAI key
+- Set `OPENAI_API_KEY` in `.env`; the Agents SDK uses it for tracing by default
 - Visit https://platform.openai.com/traces after running a pipeline
 
 ### Viewing Logs
@@ -310,7 +310,7 @@ tail -f logs/squad3.log | jq .
 - [x] OpenAI-first provider fallback with capability filtering
 - [x] Provider blacklisting with cross-blacklisting for OpenRouter
 - [x] Multi-key support for Groq and Cerebras
-- [x] Separate `OPENAI_TRACING_KEY` for trace export
+- [x] OpenAI tracing via the standard `OPENAI_API_KEY`
 
 ### Phase 6: Pipeline Integrity & Meeting Coordination
 - [x] DB connection caching (schema bootstrap once per process)

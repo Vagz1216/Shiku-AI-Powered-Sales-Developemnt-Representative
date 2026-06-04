@@ -7,10 +7,12 @@ from typing import Any, Dict, List, Optional, Type, Tuple
 from pydantic import BaseModel
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
-from openai import AsyncOpenAI
+from openai import AsyncAzureOpenAI, AsyncOpenAI
 from agents import Agent, ModelSettings, Runner, set_default_openai_key
 from agents.models.openai_provider import OpenAIProvider
 from config import settings
+from config.logging import get_request_id
+from services import metering_service, usage_service
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +100,53 @@ def _make_provider(api_key: str, base_url: str) -> OpenAIProvider:
     return OpenAIProvider(openai_client=client, use_responses=False)
 
 
+def _azure_responses_base_url(endpoint: str) -> str:
+    """Return Azure OpenAI v1 base URL for Responses API calls."""
+    base = endpoint.rstrip("/")
+    if base.endswith("/openai/v1"):
+        return f"{base}/"
+    if base.endswith("/openai"):
+        return f"{base}/v1/"
+    return f"{base}/openai/v1/"
+
+
+def _make_azure_provider() -> OpenAIProvider:
+    """Build an Azure OpenAI provider using the configured deployment."""
+    if not (
+        settings.azure_openai_api_key
+        and settings.azure_openai_endpoint
+        and settings.azure_openai_deployment
+    ):
+        raise ValueError("Azure OpenAI requires key, endpoint, and deployment")
+
+    if settings.azure_openai_wire_api == "responses":
+        client = AsyncOpenAI(
+            api_key=settings.azure_openai_api_key,
+            base_url=_azure_responses_base_url(settings.azure_openai_endpoint),
+            max_retries=0,
+        )
+        return OpenAIProvider(openai_client=client, use_responses=True)
+
+    client = AsyncAzureOpenAI(
+        api_key=settings.azure_openai_api_key,
+        azure_endpoint=settings.azure_openai_endpoint,
+        azure_deployment=settings.azure_openai_deployment,
+        api_version=settings.azure_openai_api_version,
+        max_retries=0,
+    )
+    return OpenAIProvider(
+        openai_client=client,
+        use_responses=False,
+    )
+
+
+def _model_supports_temperature(model: str) -> bool:
+    """Some reasoning/newer models reject temperature entirely."""
+    model_lower = model.lower()
+    unsupported_prefixes = ("gpt-5", "o1", "o3", "o4")
+    return not model_lower.startswith(unsupported_prefixes)
+
+
 def get_available_providers() -> List[ModelProviderInfo]:
     """Get list of available model providers based on configured API keys, skipping blacklisted ones.
     
@@ -108,6 +157,8 @@ def get_available_providers() -> List[ModelProviderInfo]:
     providers = []
 
     all_configured = []
+    if settings.azure_openai_api_key and settings.azure_openai_endpoint and settings.azure_openai_deployment:
+        all_configured.append("AzureOpenAI")
     if settings.openai_api_key:
         all_configured.append("OpenAI")
     for i, _ in enumerate(settings.groq_api_keys):
@@ -122,14 +173,27 @@ def get_available_providers() -> List[ModelProviderInfo]:
         logger.warning("All providers blacklisted — clearing to attempt recovery.")
         _BLACKLIST.clear()
 
-    # ── 1. OPENAI (paid, most capable, reliable tool calling + json_schema) ──
+    # ── 1. AZURE OPENAI (primary when configured; enterprise quota and deployment control) ──
+    if (
+        settings.azure_openai_api_key
+        and settings.azure_openai_endpoint
+        and settings.azure_openai_deployment
+        and not is_blacklisted("AzureOpenAI")
+    ):
+        providers.append(ModelProviderInfo(
+            name="AzureOpenAI",
+            model=settings.azure_openai_deployment,
+            provider=_make_azure_provider(),
+        ))
+
+    # ── 2. OPENAI (paid, most capable, reliable tool calling + json_schema) ──
     if settings.openai_api_key and not is_blacklisted("OpenAI"):
         providers.append(ModelProviderInfo(
             name="OpenAI",
             model=settings.outreach_model,
         ))
 
-    # ── 2. GROQ (free, fast, 70B — good fallback but no json_schema) ──
+    # ── 3. GROQ (free, fast, 70B — good fallback but no json_schema) ──
     for i, key in enumerate(settings.groq_api_keys):
         name = f"Groq{_suffix(i)}"
         if not is_blacklisted(name):
@@ -139,7 +203,7 @@ def get_available_providers() -> List[ModelProviderInfo]:
                 provider=_make_provider(key, "https://api.groq.com/openai/v1"),
             ))
 
-    # ── 3. CEREBRAS (free, ultra-fast, 8B — no tool calling) ──
+    # ── 4. CEREBRAS (free, ultra-fast, 8B — no tool calling) ──
     for i, key in enumerate(settings.cerebras_api_keys):
         name = f"Cerebras{_suffix(i)}"
         if not is_blacklisted(name):
@@ -149,7 +213,7 @@ def get_available_providers() -> List[ModelProviderInfo]:
                 provider=_make_provider(key, "https://api.cerebras.ai/v1"),
             ))
 
-    # ── 4. OPENROUTER MODELS (paid per token, shared credits) ──
+    # ── 5. OPENROUTER MODELS (paid per token, shared credits) ──
     if or_key and not is_blacklisted("Meta"):
         providers.append(ModelProviderInfo(
             name="Meta",
@@ -255,7 +319,8 @@ async def run_agent_with_fallback(
     output_type: Optional[Type[BaseModel]] = None,
     temperature: Optional[float] = None,
     max_tokens: Optional[int] = None,
-    tools: Optional[List[Any]] = None
+    tools: Optional[List[Any]] = None,
+    organization_id: Optional[int] = None,
 ) -> Tuple[Any, str]:
     """Run an agent with automatic provider fallback and detailed tracing.
     
@@ -282,20 +347,28 @@ async def run_agent_with_fallback(
     if not providers:
         raise RuntimeError(
             "Configuration Error: No API keys found for any supported AI provider. "
-            "Please set at least one of OPENAI_API_KEY, OPENROUTER_API_KEY, "
+            "Please set Azure OpenAI (AZURE_OPENAI_API_KEY, AZURE_OPENAI_ENDPOINT, "
+            "AZURE_OPENAI_DEPLOYMENT) or at least one of OPENAI_API_KEY, OPENROUTER_API_KEY, "
             "CEREBRAS_API_KEY, or GROQ_API_KEY in your .env file."
         )
 
     errors = []
     
     for p_info in providers:
+        attempt_started = time.perf_counter()
         try:
             logger.info(f"Attempting {name} with {p_info.name} model: {p_info.model}")
 
-            ms = ModelSettings(
-                temperature=temperature if temperature is not None else settings.outreach_temperature,
-                max_tokens=max_tokens if max_tokens is not None else settings.outreach_max_tokens,
-            )
+            model_settings = {
+                "max_tokens": max_tokens if max_tokens is not None else settings.outreach_max_tokens,
+            }
+            if _model_supports_temperature(p_info.model):
+                model_settings["temperature"] = (
+                    temperature if temperature is not None else settings.outreach_temperature
+                )
+            else:
+                logger.info(f"Skipping temperature for {p_info.name} model {p_info.model} (unsupported)")
+            ms = ModelSettings(**model_settings)
             agent = Agent(
                 name=name,
                 instructions=instructions,
@@ -306,7 +379,66 @@ async def run_agent_with_fallback(
             )
             
             result = await _execute_with_retry(agent, prompt)
-            logger.info(f"Agent {name} completed successfully with {p_info.name}")
+            latency_ms = (time.perf_counter() - attempt_started) * 1000
+            usage = usage_service.extract_usage(result)
+            tool_call_count = usage_service.count_tool_calls(result)
+            fallback_triggered = bool(errors) or p_info.name != provider_names[0]
+            ai_action_id = metering_service.get_current_ai_action_id()
+            user_id = metering_service.get_current_user_id()
+            if organization_id and ai_action_id is None:
+                action_type, credits_used = metering_service.action_defaults_for_agent(name)
+                try:
+                    action = metering_service.record_ai_usage_action(
+                        organization_id=organization_id,
+                        user_id=user_id,
+                        request_id=get_request_id(),
+                        action_type=action_type,
+                        credits_used=credits_used,
+                        source_object_type="agent",
+                        source_object_id=name,
+                        metadata={
+                            "agent_name": name,
+                            "provider": p_info.name,
+                            "model": p_info.model,
+                            "fallback_triggered": fallback_triggered,
+                        },
+                    )
+                    ai_action_id = int(action["id"]) if action.get("id") else None
+                except Exception as metering_error:
+                    logger.warning(f"Failed to record AI usage action for {name}: {metering_error}")
+            try:
+                usage_record = usage_service.record_llm_usage(
+                    organization_id=organization_id,
+                    user_id=user_id,
+                    ai_usage_action_id=ai_action_id,
+                    request_id=get_request_id(),
+                    agent_name=name,
+                    provider=p_info.name,
+                    model=p_info.model,
+                    usage=usage,
+                    latency_ms=latency_ms,
+                    fallback_triggered=fallback_triggered,
+                    attempt_count=len(errors) + 1,
+                    tool_call_count=tool_call_count,
+                )
+            except Exception as usage_error:
+                usage_record = {"estimated_cost_usd": None, "pricing_source": "record_failed"}
+                logger.warning(f"Failed to record LLM usage for {name}: {usage_error}")
+            logger.info(
+                f"Agent {name} completed successfully with {p_info.name}",
+                extra={
+                    "kind": "agent_output",
+                    "component": name,
+                    "provider": p_info.name,
+                    "model": p_info.model,
+                    "input_tokens": usage.input_tokens,
+                    "output_tokens": usage.output_tokens,
+                    "total_tokens": usage.total_tokens,
+                    "latency_ms": round(latency_ms, 2),
+                    "estimated_cost_usd": usage_record.get("estimated_cost_usd"),
+                    "fallback_triggered": fallback_triggered,
+                },
+            )
             
             if tools and hasattr(result, 'new_items'):
                 tool_calls = {}
@@ -330,9 +462,24 @@ async def run_agent_with_fallback(
                 failed_tools = [d["name"] for d in tool_calls.values() if not d["success"]]
                 
                 if failed_tools:
-                    logger.warning(f"Agent {name} had {len(failed_tools)} failed tool calls: {failed_tools}")
+                    logger.warning(
+                        f"Agent {name} had {len(failed_tools)} failed tool calls: {failed_tools}",
+                        extra={
+                            "kind": "agent_tool_call",
+                            "component": name,
+                            "failed_tools": failed_tools,
+                            "successful_tools": successful_tools,
+                        },
+                    )
                 elif tool_calls:
-                    logger.info(f"Agent {name} successfully executed {len(successful_tools)} tool calls")
+                    logger.info(
+                        f"Agent {name} successfully executed {len(successful_tools)} tool calls",
+                        extra={
+                            "kind": "agent_tool_call",
+                            "component": name,
+                            "successful_tools": successful_tools,
+                        },
+                    )
 
             return result, p_info.name
         except ProviderFatalError as e:
@@ -341,11 +488,29 @@ async def run_agent_with_fallback(
                 blacklist_provider(p_info.name)
             else:
                 error_msg = f"{p_info.name} ({p_info.model}) failed FATALLY (skipping retries): {str(e)}"
-            logger.warning(error_msg)
+            logger.warning(
+                error_msg,
+                extra={
+                    "kind": "provider_fallback",
+                    "component": name,
+                    "provider": p_info.name,
+                    "model": p_info.model,
+                    "error": str(e),
+                },
+            )
             errors.append(error_msg)
         except Exception as e:
             error_msg = f"{p_info.name} ({p_info.model}) failed after retries: {str(e)}"
-            logger.warning(error_msg)
+            logger.warning(
+                error_msg,
+                extra={
+                    "kind": "provider_fallback",
+                    "component": name,
+                    "provider": p_info.name,
+                    "model": p_info.model,
+                    "error": str(e),
+                },
+            )
             errors.append(error_msg)
 
     # If all providers fail, raise a clear error

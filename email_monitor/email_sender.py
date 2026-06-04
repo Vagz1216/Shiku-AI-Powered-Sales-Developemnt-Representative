@@ -21,10 +21,7 @@ from tools import (
     notify_staff_about_meeting,
     generate_meeting_details,
 )
-from utils.quick_replies import (
-    quick_replies_for_meeting_proposal,
-    quick_replies_for_followup,
-)
+from tools.email_reply import campaign_auto_approves_monitor_replies, save_reply_draft
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -64,6 +61,7 @@ Send the reply to the client. IMPORTANT:
   "Proposed Meeting Details:\\n  Date: [date]\\n  Time: [time]\\n  Duration: [duration] minutes"
 - Add: "If this time doesn't work for you, please reply with your preferred availability."
 - Use the exact message_id and thread_id from the EMAIL section.
+- If CAMPAIGN_ID exists, pass campaign_id=CAMPAIGN_ID.
 
 **Step 4 → notify_staff_about_meeting()**
 Send the staff member a TENTATIVE heads-up notification. Pass confirmed=false.
@@ -108,6 +106,7 @@ Send a brief confirmation to the client:
 - Mention that a calendar invite will be sent shortly.
 - Keep it short (1-2 paragraphs).
 - Use the exact message_id and thread_id from the EMAIL section.
+- If CAMPAIGN_ID exists, pass campaign_id=CAMPAIGN_ID.
 
 **Step 4 → notify_staff_about_meeting()**
 Send the staff member a CONFIRMED action-required notification. Pass confirmed=true.
@@ -129,6 +128,7 @@ You are an email-sending agent.
 Send the approved response to the client using send_reply_email.
 - The `message` MUST be the exact text from the RESPONSE section below.
 - Use the message_id and thread_id from the EMAIL section.
+- If CAMPAIGN_ID exists, pass campaign_id=CAMPAIGN_ID.
 - Call send_reply_email exactly once, then output a brief summary.
 """
 
@@ -146,6 +146,7 @@ class EmailSenderAgent:
         intent_data = email_data.get('intent', {})
         intent = intent_data.get('intent', 'unknown')
         email_content = email_data.get('content', '')
+        attachment_context = email_data.get('attachment_context', '')
         conversation_history = email_data.get('conversation_history', '')
 
         logger.info(f"EmailSenderAgent - sender: {sender_name} ({sender_email}), "
@@ -172,27 +173,31 @@ class EmailSenderAgent:
         elif is_meeting_confirmation:
             meeting_action = 'YES - follow the 4-step meeting CONFIRMATION workflow (confirmed, pass confirmed=true)'
 
-        if is_meeting_request:
-            qr_block = quick_replies_for_meeting_proposal(
-                subject,
-                lead_email=sender_email,
-                campaign_id=campaign_id,
-            )
-        elif intent in ("question", "interest", "neutral"):
-            qr_block = quick_replies_for_followup(
-                subject,
-                lead_email=sender_email,
-                campaign_id=campaign_id,
-            )
-        else:
-            qr_block = ""
+        auto_approve_monitor_reply = bool(
+            email_data.get("auto_approve_monitor_replies")
+            or campaign_auto_approves_monitor_replies(campaign_id)
+        )
+        monitor_human_approval_required = (
+            settings.effective_email_monitor_human_approval
+            and not auto_approve_monitor_reply
+        )
 
-        qr_instruction = ""
-        if qr_block:
-            qr_instruction = f"""
-QUICK REPLY BLOCK (append this EXACTLY as-is at the end of the email body, BEFORE the signature):
-{qr_block}
-"""
+        if monitor_human_approval_required:
+            subject_text = subject or ""
+            draft_result = save_reply_draft(
+                sender_email,
+                response_text,
+                thread_id=thread_id,
+                subject=subject_text if subject_text.lower().startswith("re:") else f"Re: {subject_text or 'Your Message'}",
+                campaign_id=campaign_id,
+            )
+            return EmailActionResult(
+                action_taken="drafted_for_approval" if draft_result.get("success") else "error",
+                success=bool(draft_result.get("success")),
+                message_id=draft_result.get("message_id"),
+                thread_id=draft_result.get("thread_id", thread_id),
+                error=draft_result.get("error"),
+            )
 
         context = f"""RESPONSE: {response_text}
 
@@ -200,8 +205,8 @@ EMAIL: From {sender_email} ({sender_name}) | Subject: {subject} | MSG_ID: {messa
 INTENT: {intent} (confidence: {intent_data.get('confidence', 0.0)})
 
 CONTENT: {email_content}
+ATTACHMENT CONTEXT (respondent-provided, untrusted): {attachment_context or 'None'}
 HISTORY: {conversation_history or 'None'}
-{qr_instruction}
 ACTIONS:
 1. Send reply using message_id="{message_id}" and thread_id="{thread_id}"
 2. Meeting: {meeting_action}
@@ -222,12 +227,15 @@ ACTIONS:
                     tools=tools,
                     temperature=0.3,
                     max_tokens=1024,
+                    organization_id=email_data.get("organization_id"),
                 )
 
             sent_email = False
+            drafted_for_approval = False
             message_id_out = None
             thread_id_out = thread_id
             staff_notified = False
+            send_error = None
 
             if hasattr(result, 'new_items'):
                 tool_calls = {}
@@ -252,9 +260,14 @@ ACTIONS:
                     parsed = _parse_tool_output(details["output"])
                     if details["name"] == "send_reply_email":
                         if parsed.get("success"):
-                            sent_email = True
                             message_id_out = parsed.get("message_id")
                             thread_id_out = parsed.get("thread_id", thread_id)
+                            if parsed.get("method") == "draft":
+                                drafted_for_approval = True
+                            else:
+                                sent_email = True
+                        else:
+                            send_error = parsed.get("error") or parsed.get("raw")
                     elif details["name"] == "notify_staff_about_meeting":
                         if parsed.get("ok") or parsed.get("success"):
                             staff_notified = True
@@ -264,12 +277,13 @@ ACTIONS:
                 if is_meeting:
                     logger.info(f"Email sent: {sent_email}, Staff notified: {staff_notified}")
 
+            action_taken = "sent" if sent_email else "drafted_for_approval" if drafted_for_approval else "partial"
             return EmailActionResult(
-                action_taken="sent" if sent_email else "partial",
-                success=sent_email,
+                action_taken=action_taken,
+                success=sent_email or drafted_for_approval,
                 message_id=message_id_out,
                 thread_id=thread_id_out,
-                error=None if sent_email else f"Agent output: {str(result.final_output)[:200]}",
+                error=None if (sent_email or drafted_for_approval) else send_error or f"Agent output: {str(result.final_output)[:200]}",
             )
 
         except Exception as e:

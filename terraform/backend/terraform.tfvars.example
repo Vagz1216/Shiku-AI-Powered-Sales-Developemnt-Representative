@@ -7,11 +7,15 @@ secret_arn  = "arn:aws:secretsmanager:us-west-2:ACCOUNT_ID:secret:sdr-aurora-cre
 db_name     = "sdr"
 
 # --- Primary + fallback AI (matches config/settings.py) ---
-openai_api_key      = ""
-openai_tracing_key  = "" # Optional; separate key for OpenAI tracing export (main.py). Omit if unused.
-groq_api_key        = "" # Optional comma-separated keys for rotation
-cerebras_api_key    = ""
-openrouter_api_key  = ""
+openai_api_key             = ""
+azure_openai_api_key       = "" # Optional primary provider when endpoint + deployment are also set
+azure_openai_endpoint      = "" # Example: https://your-resource.openai.azure.com
+azure_openai_deployment    = ""
+azure_openai_api_version   = "2024-10-21"
+azure_openai_wire_api      = "chat_completions" # or "responses" if your deployment supports it
+groq_api_key               = "" # Optional comma-separated keys for rotation
+cerebras_api_key           = ""
+openrouter_api_key         = ""
 
 # --- Email + integrations ---
 agentmail_api_key   = ""

@@ -112,7 +112,7 @@ graph TB
    cp .env.example .env
    ```
 2. Fill in the required values in `.env`:
-   *   `OPENAI_API_KEY`
+*   `OPENAI_API_KEY` or Azure OpenAI settings (`AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT`)
    *   `AGENTMAIL_API_KEY`
    *   `AGENTMAIL_INBOX_ID`
    *   `DATA_SOURCE` (Optional: set to `CRM` to test the Adapter Pattern dummy logic)
@@ -172,6 +172,17 @@ npm run build                # produces frontend/out/
 ```
 
 Set `NEXT_PUBLIC_API_URL` to your **CloudFront** URL in production so the browser calls the API through the same domain.
+
+## Non-AWS deployment (recommended first)
+
+Before moving to Azure or AWS, use the lighter path now configured in this repo:
+
+*   **Vercel** for the `frontend/` Next.js static dashboard
+*   **Render** for the Dockerized FastAPI backend
+*   **Render persistent disk + SQLite** as an interim database
+*   **Managed Postgres** before real customer traffic
+
+The GitHub Actions pipeline runs backend tests, frontend lint/build, and deploys on `main` when platform secrets are configured. See **`docs/DEPLOY_VERCEL_RENDER.md`**.
 
 ## AWS deployment (summary)
 

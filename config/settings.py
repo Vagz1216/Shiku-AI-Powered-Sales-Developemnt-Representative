@@ -1,6 +1,8 @@
 """Application settings from environment variables."""
 
-from pydantic import Field
+from typing import Literal
+
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,7 +13,7 @@ class AppConfig(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
-        extra="ignore",  # Ignore extra fields instead of raising errors
+        extra="forbid",
     )
 
     # Core settings
@@ -36,6 +38,11 @@ class AppConfig(BaseSettings):
         default=5,
         description="Number of backup log files to keep",
         gt=0, le=20
+    )
+    llm_pricing_file: str = Field(
+        default="config/llm_pricing.json",
+        validation_alias="LLM_PRICING_FILE",
+        description="Path to the editable model pricing table used for estimated usage costs",
     )
     app_name: str = Field(
         default="Squad3",
@@ -75,10 +82,30 @@ class AppConfig(BaseSettings):
         validation_alias="OPENAI_API_KEY",
         description="OpenAI API key for AI model access",
     )
-    openai_tracing_key: str | None = Field(
+    azure_openai_api_key: str | None = Field(
         default=None,
-        validation_alias="OPENAI_TRACING_KEY",
-        description="Separate OpenAI API key used only for traces export. If unset, uses OPENAI_API_KEY.",
+        validation_alias="AZURE_OPENAI_API_KEY",
+        description="Azure OpenAI API key for the primary fallback provider",
+    )
+    azure_openai_endpoint: str | None = Field(
+        default=None,
+        validation_alias="AZURE_OPENAI_ENDPOINT",
+        description="Azure OpenAI endpoint, e.g. https://resource.openai.azure.com",
+    )
+    azure_openai_deployment: str | None = Field(
+        default=None,
+        validation_alias="AZURE_OPENAI_DEPLOYMENT",
+        description="Azure OpenAI deployment name to use as the model identifier",
+    )
+    azure_openai_api_version: str = Field(
+        default="2024-10-21",
+        validation_alias="AZURE_OPENAI_API_VERSION",
+        description="Azure OpenAI API version",
+    )
+    azure_openai_wire_api: Literal["chat_completions", "responses"] = Field(
+        default="chat_completions",
+        validation_alias="AZURE_OPENAI_WIRE_API",
+        description="Azure OpenAI transport used by the Agents SDK provider. responses uses the /openai/v1/ endpoint.",
     )
     openrouter_api_key: str | None = Field(
         default=None,
@@ -95,6 +122,21 @@ class AppConfig(BaseSettings):
         validation_alias="GROQ_API_KEY",
         description="Groq API key(s) for fallback AI access. Comma-separated for multiple keys.",
     )
+    gemini_api_key: str | None = Field(
+        default=None,
+        validation_alias="GEMINI_API_KEY",
+        description="Reserved Gemini API key field so local .env validation stays strict",
+    )
+    google_api_key: str | None = Field(
+        default=None,
+        validation_alias="GOOGLE_API_KEY",
+        description="Reserved Google API key field so local .env validation stays strict",
+    )
+    grok_api_key: str | None = Field(
+        default=None,
+        validation_alias="GROK_API_KEY",
+        description="Reserved xAI/Grok API key field so local .env validation stays strict",
+    )
     agentmail_api_key: str | None = Field(
         default=None,
         validation_alias="AGENTMAIL_API_KEY",
@@ -105,6 +147,61 @@ class AppConfig(BaseSettings):
         validation_alias="AGENTMAIL_INBOX_ID",
         description="AgentMail inbox identifier",
     )
+    email_provider: Literal["agentmail", "resend", "mailbox"] = Field(
+        default="agentmail",
+        validation_alias="EMAIL_PROVIDER",
+        description="Email transport provider for outbound and monitor replies",
+    )
+    default_mailbox_id: int | None = Field(
+        default=None,
+        validation_alias="DEFAULT_MAILBOX_ID",
+        description="Optional mailbox_connections.id to use when EMAIL_PROVIDER=mailbox",
+    )
+    resend_api_key: str | None = Field(
+        default=None,
+        validation_alias="RESEND_API_KEY",
+        description="Resend API key for email operations",
+    )
+    resend_from_email: str | None = Field(
+        default=None,
+        validation_alias="RESEND_FROM_EMAIL",
+        description="Verified Resend sender, e.g. Market Hacks <sdr@outreach.example.com>",
+    )
+    resend_reply_to: str | None = Field(
+        default=None,
+        validation_alias="RESEND_REPLY_TO",
+        description="Reply-To address for Resend outbound mail",
+    )
+    resend_webhook_secret: str | None = Field(
+        default=None,
+        validation_alias="RESEND_WEBHOOK_SECRET",
+        description="Svix signing secret for Resend webhooks",
+    )
+    crm_provider: str | None = Field(
+        default=None,
+        validation_alias="CRM_PROVIDER",
+        description="CRM provider for direct lead import, currently hubspot",
+    )
+    crm_api_key: str | None = Field(
+        default=None,
+        validation_alias="CRM_API_KEY",
+        description="CRM API key for direct lead import",
+    )
+    crm_base_url: str | None = Field(
+        default=None,
+        validation_alias="CRM_BASE_URL",
+        description="Optional CRM API base URL override",
+    )
+    platform_owner_emails: str = Field(
+        default="",
+        validation_alias="PLATFORM_OWNER_EMAILS",
+        description="Comma-separated email addresses that can create and administer customer organizations",
+    )
+    mailbox_encryption_key: str | None = Field(
+        default=None,
+        validation_alias="MAILBOX_ENCRYPTION_KEY",
+        description="Fernet key used to encrypt mailbox SMTP/IMAP passwords at rest",
+    )
     composio_api_key: str | None = Field(
         default=None,
         description="Composio API key for tool integrations"
@@ -112,6 +209,26 @@ class AppConfig(BaseSettings):
     composio_user_id: str | None = Field(
         default=None,
         description="Composio user ID for consistent session management"
+    )
+    clerk_secret_key: str | None = Field(
+        default=None,
+        validation_alias="CLERK_SECRET_KEY",
+        description="Clerk backend secret key",
+    )
+    clerk_jwks_url: str | None = Field(
+        default=None,
+        validation_alias="CLERK_JWKS_URL",
+        description="Clerk JWKS URL for JWT verification",
+    )
+    next_public_clerk_publishable_key: str | None = Field(
+        default=None,
+        validation_alias="NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY",
+        description="Frontend Clerk publishable key carried in root .env for local builds",
+    )
+    vercel_oidc_token: str | None = Field(
+        default=None,
+        validation_alias="VERCEL_OIDC_TOKEN",
+        description="Optional Vercel OIDC token ignored by backend runtime",
     )
 
     # Model Parameters - Intent Extraction
@@ -171,9 +288,25 @@ class AppConfig(BaseSettings):
         description="Maximum number of emails the system can send per day to protect sender reputation",
         gt=0
     )
+    rate_limit_requests_per_minute: int = Field(
+        default=60,
+        validation_alias="RATE_LIMIT_REQUESTS_PER_MINUTE",
+        description="Simple per-client request limit for user-facing API endpoints",
+        gt=0,
+    )
     require_human_approval: bool = Field(
-        default=False,
+        default=True,
         description="If True, emails are saved as drafts for human review instead of being sent immediately."
+    )
+    require_outreach_human_approval: bool | None = Field(
+        default=None,
+        validation_alias=AliasChoices("REQUIRE_OUTREACH_HUMAN_APPROVAL", "OUTREACH_REQUIRE_HUMAN_APPROVAL"),
+        description="Optional override for outbound outreach approval. Defaults to require_human_approval.",
+    )
+    require_email_monitor_human_approval: bool | None = Field(
+        default=None,
+        validation_alias=AliasChoices("REQUIRE_EMAIL_MONITOR_HUMAN_APPROVAL", "EMAIL_MONITOR_REQUIRE_HUMAN_APPROVAL"),
+        description="Optional override for inbound email-monitor replies. Defaults to require_human_approval.",
     )
 
     # --- Outreach agent (packages/agents/outreach_*) ---
@@ -221,13 +354,54 @@ class AppConfig(BaseSettings):
 
     # Deployment
     cors_origins: str = Field(
-        default="http://localhost:3000,http://localhost:3001,http://localhost:3002",
+        default=(
+            "http://localhost:3000,http://localhost:3001,http://localhost:3002,"
+            "http://127.0.0.1:3000,http://127.0.0.1:3001,http://127.0.0.1:3002"
+        ),
         description="Comma-separated allowed CORS origins",
     )
     webhook_secret: str | None = Field(
         default=None,
         validation_alias="WEBHOOK_SECRET",
         description="Shared secret for validating incoming webhook requests (optional for local dev)",
+    )
+    cron_secret: str | None = Field(
+        default=None,
+        validation_alias="CRON_SECRET",
+        description="Shared secret for trusted schedulers that call due-work endpoints",
+    )
+    scheduled_sender_enabled: bool = Field(
+        default=True,
+        validation_alias="SCHEDULED_SENDER_ENABLED",
+        description="Run the in-process background sender for due scheduled emails",
+    )
+    scheduled_sender_interval_seconds: int = Field(
+        default=30,
+        validation_alias="SCHEDULED_SENDER_INTERVAL_SECONDS",
+        description="How often the in-process scheduled email sender checks for due emails",
+        gt=0,
+        le=3600,
+    )
+    scheduled_sender_batch_size: int = Field(
+        default=50,
+        validation_alias="SCHEDULED_SENDER_BATCH_SIZE",
+        description="Maximum scheduled emails to process per background sender tick",
+        gt=0,
+        le=200,
+    )
+    scheduled_sender_retry_delay_seconds: int = Field(
+        default=300,
+        validation_alias="SCHEDULED_SENDER_RETRY_DELAY_SECONDS",
+        description="How long to wait before retrying a scheduled email after a send failure",
+        gt=0,
+        le=86400,
+    )
+    scheduled_sender_max_attempts: int = Field(
+        default=3,
+        validation_alias="SCHEDULED_SENDER_MAX_ATTEMPTS",
+        description="Maximum automatic send attempts before a scheduled email is paused for review",
+        gt=0,
+        le=20,
     )
 
     # Multi-key helpers: split comma-separated values into lists
@@ -249,6 +423,10 @@ class AppConfig(BaseSettings):
             return []
         return [k.strip() for k in self.openrouter_api_key.split(",") if k.strip()]
 
+    @property
+    def platform_owner_email_set(self) -> set[str]:
+        return {email.strip().lower() for email in self.platform_owner_emails.split(",") if email.strip()}
+
     # Convenient aliases
     @property
     def openai_key(self) -> str | None:
@@ -265,6 +443,18 @@ class AppConfig(BaseSettings):
     @property
     def db_url(self) -> str:
         return self.database_url
+
+    @property
+    def effective_outreach_human_approval(self) -> bool:
+        if self.require_outreach_human_approval is not None:
+            return self.require_outreach_human_approval
+        return self.require_human_approval
+
+    @property
+    def effective_email_monitor_human_approval(self) -> bool:
+        if self.require_email_monitor_human_approval is not None:
+            return self.require_email_monitor_human_approval
+        return self.require_human_approval
 
 
 # Global singleton instance

@@ -1,9 +1,10 @@
-"""Send outbound email via AgentMail for agent tools and the outreach pipeline."""
+"""Send outbound email for agent tools and the outreach pipeline."""
 
 import logging
 import time
 from datetime import date
 from email.utils import formataddr
+from typing import Any
 
 from agentmail import AgentMail
 from agentmail.core.api_error import ApiError
@@ -12,6 +13,8 @@ from agents import function_tool
 from config import settings
 from schema import SendEmailResult
 import asyncio
+from services.mailbox_transport import send_mailbox_email, validate_mailbox_config
+from services.resend_email import send_resend_email, validate_resend_config
 from utils.llama_guard import check_email_safety
 
 logger = logging.getLogger(__name__)
@@ -69,12 +72,17 @@ async def send_plain_email(
     skip_safety_check: bool = False,
     internal: bool = False,
     html_body: str | None = None,
+    attachments: list[dict[str, Any]] | None = None,
+    bypass_human_approval: bool = False,
+    organization_id: int | None = None,
 ) -> SendEmailResult:
-    """Send a plain-text email via AgentMail (no agent wrapper).
+    """Send a plain-text email via the configured email provider.
 
     Args:
         internal: If True, skip safety check AND opt-out footer (for staff notifications).
         skip_safety_check: Legacy flag, same effect as internal for safety check only.
+        bypass_human_approval: If True, send immediately because a prior human
+            approval artifact already exists.
     """
     if error := _validate_inputs(email, subject, body):
         return SendEmailResult(ok=False, error=error)
@@ -91,26 +99,32 @@ async def send_plain_email(
         body = _ensure_opt_out_footer(body)
 
     if not (skip_safety_check or internal):
-        safety_check = await check_email_safety(body, subject)
+        safety_check = await check_email_safety(body, subject, organization_id=organization_id)
         if not safety_check.is_safe:
             return SendEmailResult(ok=False, error=f"Safety check failed: {safety_check.violation_reason}")
         
-    if settings.require_human_approval:
+    if settings.effective_outreach_human_approval and not bypass_human_approval:
         from utils.db_connection import get_conn
         import datetime
         conn = get_conn()
         try:
             with conn:
                 # Find lead_id
-                cur = conn.execute("SELECT id FROM leads WHERE email = ?", (email,))
+                if organization_id:
+                    cur = conn.execute(
+                        "SELECT id FROM leads WHERE email = ? AND organization_id = ?",
+                        (email, organization_id),
+                    )
+                else:
+                    cur = conn.execute("SELECT id FROM leads WHERE email = ?", (email,))
                 row = cur.fetchone()
                 lead_id = row['id'] if row else None
                 
                 # Save as draft
                 now_iso = datetime.datetime.utcnow().isoformat() + 'Z'
                 conn.execute(
-                    "INSERT INTO email_messages (lead_id, direction, subject, body, status, processed, created_at) VALUES (?, 'outbound', ?, ?, 'draft', 1, ?)",
-                    (lead_id, subject, body, now_iso)
+                    "INSERT INTO email_messages (organization_id, lead_id, direction, subject, body, status, processed, approved, created_at) VALUES (?, ?, 'outbound', ?, ?, 'DRAFT', 1, 0, ?)",
+                    (organization_id or 1, lead_id, subject, body, now_iso)
                 )
             return SendEmailResult(ok=True, message_id="draft", thread_id="draft")
         except Exception as e:
@@ -118,7 +132,15 @@ async def send_plain_email(
 
     if error := _validate_config():
         return SendEmailResult(ok=False, error=error)
-    result = _send_with_retry(email, name, subject, body, html_body=html_body)
+    result = _send_with_retry(
+        email,
+        name,
+        subject,
+        body,
+        html_body=html_body,
+        attachments=attachments,
+        organization_id=organization_id,
+    )
     if result.ok:
         _increment_daily_count()
     return result
@@ -126,7 +148,7 @@ async def send_plain_email(
 
 @function_tool
 async def send_agent_email(email: str, name: str, subject: str, body: str) -> SendEmailResult:
-    """Send plain text email via AgentMail (agent-callable tool)."""
+    """Send plain text email via the configured provider (agent-callable tool)."""
     return await send_plain_email(email, name, subject, body)
 
 
@@ -145,6 +167,10 @@ def _validate_inputs(email: str, subject: str, body: str) -> str | None:
 
 
 def _validate_config() -> str | None:
+    if settings.email_provider == "mailbox":
+        return validate_mailbox_config()
+    if settings.email_provider == "resend":
+        return validate_resend_config()
     if not settings.agent_mail_api:
         return "AGENTMAIL_API_KEY is not set."
     if not settings.agent_mail_inbox:
@@ -152,10 +178,62 @@ def _validate_config() -> str | None:
     return None
 
 
-def _send_with_retry(email: str, name: str, subject: str, body: str, html_body: str | None = None) -> SendEmailResult:
+def _build_agentmail_attachments(attachments: list[dict[str, Any]] | None):
+    if not attachments:
+        return None
+    from agentmail.attachments.types.send_attachment import SendAttachment
+
+    payload = []
+    for attachment in attachments:
+        content = attachment.get("content_base64") or attachment.get("content")
+        url = attachment.get("url")
+        if not content and not url:
+            continue
+        payload.append(
+            SendAttachment(
+                filename=attachment.get("filename") or "attachment",
+                content_type=attachment.get("content_type"),
+                content_disposition=attachment.get("content_disposition") or "attachment",
+                content=content,
+                url=url,
+            )
+        )
+    return payload or None
+
+
+def _send_with_retry(
+    email: str,
+    name: str,
+    subject: str,
+    body: str,
+    html_body: str | None = None,
+    attachments: list[dict[str, Any]] | None = None,
+    organization_id: int | None = None,
+) -> SendEmailResult:
+    if settings.email_provider == "mailbox":
+        return send_mailbox_email(
+            email=email,
+            name=name,
+            subject=subject,
+            body=body,
+            html_body=html_body,
+            attachments=attachments,
+            organization_id=organization_id,
+        )
+    if settings.email_provider == "resend":
+        return send_resend_email(
+            email=email,
+            name=name,
+            subject=subject,
+            body=body,
+            html_body=html_body,
+            attachments=attachments,
+        )
+
     client = AgentMail(api_key=settings.agent_mail_api)
     name = (name or "").strip()
     to = formataddr((name, email)) if name else email
+    agentmail_attachments = _build_agentmail_attachments(attachments)
     for attempt in range(5):
         try:
             payload = {
@@ -165,13 +243,16 @@ def _send_with_retry(email: str, name: str, subject: str, body: str, html_body: 
             }
             if html_body:
                 payload["html"] = html_body.strip()
+            if agentmail_attachments:
+                payload["attachments"] = agentmail_attachments
 
             try:
                 response = client.inboxes.messages.send(settings.agent_mail_inbox, **payload)
             except TypeError as sdk_error:
-                if "html" in payload:
-                    logger.warning(f"AgentMail SDK rejected html payload, retrying text-only: {sdk_error}")
+                if "html" in payload or "attachments" in payload:
+                    logger.warning(f"AgentMail SDK rejected optional payload fields, retrying text-only: {sdk_error}")
                     payload.pop("html", None)
+                    payload.pop("attachments", None)
                     response = client.inboxes.messages.send(settings.agent_mail_inbox, **payload)
                 else:
                     raise

@@ -1,0 +1,44 @@
+[
+  {
+    "id": "intent_001",
+    "agent": "intent_extractor",
+    "input": {
+      "subject": "Re: quick call",
+      "content": "Tuesday at 2 works for me. Looking forward to speaking."
+    },
+    "expected_properties": [
+      "classifies as meeting_confirmation",
+      "confidence is high",
+      "does not treat this as first-time meeting_request"
+    ]
+  },
+  {
+    "id": "drafter_001",
+    "agent": "drafter",
+    "input": {
+      "campaign": "AI SDR automation",
+      "lead_company": "Acme Health",
+      "industry": "Healthcare",
+      "pain_points": "manual follow-up and missed inbound replies"
+    },
+    "expected_properties": [
+      "references healthcare or follow-up pain",
+      "contains no placeholders",
+      "has a clear call to action",
+      "contains no unsupported guarantees"
+    ]
+  },
+  {
+    "id": "response_001",
+    "agent": "response_agent",
+    "input": {
+      "intent": "meeting_request",
+      "content": "Can we meet next week to discuss?"
+    },
+    "expected_properties": [
+      "expresses interest in meeting",
+      "does not claim calendar invite already sent",
+      "has complete signature"
+    ]
+  }
+]
