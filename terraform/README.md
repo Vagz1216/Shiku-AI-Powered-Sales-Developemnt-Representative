@@ -2,7 +2,7 @@
 
 Independent stacks with **local state** (same pattern as the Alex course): `terraform/*.tfstate` is gitignored—do not commit state.
 
-**Region:** default `us-west-2` (override with `aws_region` in each stack’s `terraform.tfvars`).
+**Region:** default `eu-west-2` (London). IAM Identity Center can remain in `eu-north-1`; that region is only for workforce login. The application stack uses `eu-west-2` because App Runner is available there.
 
 ## Order of deployment
 

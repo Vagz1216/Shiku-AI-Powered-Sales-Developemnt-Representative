@@ -1,4 +1,4 @@
-# Deploying SDR on AWS (us-west-2)
+# Deploying SDR on AWS (eu-west-2)
 
 This document aligns with the **Alex** course approach (separate Terraform directories, local state, incremental IAM) while listing what you need **in addition** to guides completed through **day 4**, so the **SDR** stack (Aurora + App Runner + ECR + S3 + CloudFront) can be deployed safely.
 
@@ -29,10 +29,11 @@ The **App Runner instance role** created by Terraform is already scoped to **RDS
 
 ## Region
 
-Use **`us-west-2`** everywhere:
+Use **`eu-west-2`** everywhere:
 
-- Default in `terraform/*/variables.tf` is `us-west-2`.
-- `export AWS_REGION=us-west-2` (or `AWS_DEFAULT_REGION`) for CLI and for `scripts/apply_aurora_schema.py`.
+- Default in `terraform/*/variables.tf` is `eu-west-2`.
+- `export AWS_REGION=eu-west-2` (or `AWS_DEFAULT_REGION`) for CLI and for `scripts/apply_aurora_schema.py`.
+- IAM Identity Center can remain in `eu-north-1`; that only affects SSO login. The Shiku application resources use `eu-west-2` because App Runner is available there.
 
 ## Step 1 — Database (`terraform/database`)
 
@@ -49,7 +50,7 @@ Save **`cluster_arn`**, **`secret_arn`**, **`db_name`** from `terraform output`.
 From the **project root**, with credentials that can call **RDS Data API** on that cluster:
 
 ```bash
-export AWS_REGION=us-west-2
+export AWS_REGION=eu-west-2
 export DB_CLUSTER_ARN="(terraform output cluster_arn)"
 export DB_SECRET_ARN="(terraform output secret_arn)"
 export DB_NAME="sdr"
@@ -109,7 +110,7 @@ Sensitive values today are passed as **App Runner environment variables** (Terra
 
 Set **`cors_origins`** to your **CloudFront HTTPS URL** once step 4 exists (comma-separated list if needed). Until then, you can temporarily use the App Runner URL for testing.
 
-Note **`service_url`** from output (e.g. `https://xxxx.us-west-2.awsapprunner.com`).
+Note **`service_url`** from output (e.g. `https://xxxx.eu-west-2.awsapprunner.com`).
 
 ### If `terraform apply` fails with App Runner `CREATE_FAILED`
 
@@ -118,8 +119,8 @@ Usually the ECR image was missing. Recover:
 1. **Push** `sdr-backend:latest` to ECR (Step 3).
 2. **Delete** the failed App Runner service (Console → App Runner → service → Delete), or:
    ```bash
-   aws apprunner delete-service --region us-west-2 \
-     --service-arn "$(aws apprunner list-services --region us-west-2 --query "ServiceSummaryList[?ServiceName=='sdr-backend'].ServiceArn | [0]" --output text)"
+   aws apprunner delete-service --region eu-west-2 \
+     --service-arn "$(aws apprunner list-services --region eu-west-2 --query "ServiceSummaryList[?ServiceName=='sdr-backend'].ServiceArn | [0]" --output text)"
    ```
 3. **Remove** the failed resource from Terraform state so it can be recreated:
    ```bash
@@ -133,10 +134,10 @@ Usually the ECR image was missing. Recover:
 Build from repo root (Dockerfile listens on **port 8000**, matching App Runner):
 
 ```bash
-aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin ACCOUNT_ID.dkr.ecr.us-west-2.amazonaws.com
+aws ecr get-login-password --region eu-west-2 | docker login --username AWS --password-stdin ACCOUNT_ID.dkr.ecr.eu-west-2.amazonaws.com
 docker build -t sdr-backend .
-docker tag sdr-backend:latest ACCOUNT_ID.dkr.ecr.us-west-2.amazonaws.com/sdr-backend:latest
-docker push ACCOUNT_ID.dkr.ecr.us-west-2.amazonaws.com/sdr-backend:latest
+docker tag sdr-backend:latest ACCOUNT_ID.dkr.ecr.eu-west-2.amazonaws.com/sdr-backend:latest
+docker push ACCOUNT_ID.dkr.ecr.eu-west-2.amazonaws.com/sdr-backend:latest
 ```
 
 Trigger an App Runner deployment (console **Deploy**, or `aws apprunner start-deployment` on the service).
@@ -146,7 +147,7 @@ Trigger an App Runner deployment (console **Deploy**, or `aws apprunner start-de
 ```bash
 cd terraform/frontend
 cp terraform.tfvars.example terraform.tfvars
-# backend_url = https://....us-west-2.awsapprunner.com from backend output
+# backend_url = https://....eu-west-2.awsapprunner.com from backend output
 terraform init && terraform apply
 ```
 

@@ -2,7 +2,7 @@
 """Apply db/schema_pg.sql (and optionally db/seed_pg.sql) via Aurora Data API.
 
 Requires: AWS credentials with rds-data:ExecuteStatement on the cluster;
-           DB_CLUSTER_ARN, DB_SECRET_ARN, DB_NAME, AWS_REGION (default us-west-2).
+           DB_CLUSTER_ARN, DB_SECRET_ARN, DB_NAME, AWS_REGION (default eu-west-2).
 
 Usage:
   uv run scripts/apply_aurora_schema.py
@@ -41,7 +41,7 @@ def main() -> int:
     cluster = os.environ.get("DB_CLUSTER_ARN")
     secret = os.environ.get("DB_SECRET_ARN")
     database = os.environ.get("DB_NAME", "sdr")
-    region = os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION", "us-west-2"))
+    region = os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION", "eu-west-2"))
 
     if not cluster or not secret:
         print("Set DB_CLUSTER_ARN and DB_SECRET_ARN (e.g. from terraform/database outputs).", file=sys.stderr)
