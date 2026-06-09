@@ -16,12 +16,12 @@
 **Rationale:** A single provider is a reliability and quota risk. Centralizing fallback keeps provider ordering, retries, and capability filtering in one place.
 **Trade-offs:** Provider behavior differs, so structured-output and tool-calling support must be filtered per request.
 
-### ADR-003 - SQLite Locally, Aurora Data API In Production
+### ADR-003 - SQLite Locally, PostgreSQL In Production
 
-**Context:** Local development needs a simple database, while deployment needs managed persistence on AWS.
-**Decision:** Use SQLite for local development and Aurora Serverless PostgreSQL through the RDS Data API when AWS database environment variables are set.
-**Rationale:** This gives fast local setup and a production path without maintaining separate application code for the two modes.
-**Trade-offs:** SQL compatibility must be managed carefully. Any new query pattern should be tested against the adapter layer.
+**Context:** Local development needs a simple database, while deployment needs managed persistence on AWS or Azure.
+**Decision:** Use SQLite for local development. Use Aurora Serverless PostgreSQL through the RDS Data API when AWS database environment variables are set. Use standard PostgreSQL when `DATABASE_URL` starts with `postgresql://` or `postgres://`, which supports Azure Database for PostgreSQL and other managed Postgres providers.
+**Rationale:** This gives fast local setup while keeping a production path for both AWS and Azure without changing service-layer business logic.
+**Trade-offs:** SQL compatibility must be managed carefully. The app keeps integer-backed boolean columns in the PostgreSQL schema to match existing SQLite-style service queries, and new query patterns should be tested against the adapter layer.
 
 ### ADR-004 - Clerk JWT Authentication
 
@@ -78,6 +78,13 @@
 **Decision:** Deploy the static Next.js frontend to Vercel and the Dockerized FastAPI backend to Render, using a Render persistent disk for interim SQLite persistence.
 **Rationale:** Vercel is a strong fit for the static dashboard, while Render can run the long-lived API container, webhooks, and scheduled sender without forcing the backend into serverless constraints.
 **Trade-offs:** SQLite on a persistent disk is an interim single-instance choice. Move to managed Postgres before real customer traffic or multi-instance scaling.
+
+### ADR-012 - Azure Deployment Target
+
+**Context:** Some customer deployments may run in an Azure-owned subscription where the developer does not have human Azure portal access.
+**Decision:** Support Azure Container Apps for the FastAPI backend, Azure Container Registry for images, Azure Database for PostgreSQL for persistence, Azure Static Web Apps for the static frontend, and GitHub Actions OIDC for deployment automation.
+**Rationale:** This maps the existing Docker backend and static frontend to Azure-native services while allowing the Azure account owner to retain account control.
+**Trade-offs:** Azure adds a standard PostgreSQL connection path and deployment workflow, but infrastructure provisioning remains an owner-controlled responsibility unless Azure Terraform is added later.
 
 ## Prompt Engineering Log
 

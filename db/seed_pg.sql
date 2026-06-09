@@ -14,12 +14,12 @@ INSERT INTO campaigns (id, name, value_proposition, cta, status) VALUES
 ON CONFLICT DO NOTHING;
 
 INSERT INTO leads (id, email, name, company, industry, pain_points, status, email_opt_out, touch_count) VALUES
-  (1, 'benjamin92clarke@gmail.com', 'Benjamin', 'Benjamin Legal Tech', 'Legal Technology', 'Complex document management and compliance tracking', 'NEW', FALSE, 0),
-  (2, 'darrielcollins4@gmail.com', 'Collins', 'Darriel Solutions', 'Software Development', 'Scaling development processes and team coordination', 'NEW', FALSE, 0),
-  (3, 'martinkam1216@gmail.com', 'Martinkam1216', 'MarTechKam Inc', 'Marketing Technology', 'Customer attribution and campaign optimization', 'NEW', FALSE, 0),
-  (4, 'martinezzval12@gmail.com', 'Darriel', 'Darriel Financial', 'Financial Technology', 'SOC2 compliance for enterprise sales acceleration', 'NEW', FALSE, 0),
-  (5, 'elvomanton@gmail.com', 'Elvomanton', 'Elvo Analytics', 'Data Analytics', 'Real-time dashboard automation and insights', 'NEW', FALSE, 0),
-  (6, 'gabriellegarcia9090@gmail.com', 'Gabriel', 'GabrielTech Innovations', 'Technology Consulting', 'DevOps automation and deployment efficiency', 'NEW', FALSE, 0)
+  (1, 'benjamin92clarke@gmail.com', 'Benjamin', 'Benjamin Legal Tech', 'Legal Technology', 'Complex document management and compliance tracking', 'NEW', 0, 0),
+  (2, 'darrielcollins4@gmail.com', 'Collins', 'Darriel Solutions', 'Software Development', 'Scaling development processes and team coordination', 'NEW', 0, 0),
+  (3, 'martinkam1216@gmail.com', 'Martinkam1216', 'MarTechKam Inc', 'Marketing Technology', 'Customer attribution and campaign optimization', 'NEW', 0, 0),
+  (4, 'martinezzval12@gmail.com', 'Darriel', 'Darriel Financial', 'Financial Technology', 'SOC2 compliance for enterprise sales acceleration', 'NEW', 0, 0),
+  (5, 'elvomanton@gmail.com', 'Elvomanton', 'Elvo Analytics', 'Data Analytics', 'Real-time dashboard automation and insights', 'NEW', 0, 0),
+  (6, 'gabriellegarcia9090@gmail.com', 'Gabriel', 'GabrielTech Innovations', 'Technology Consulting', 'DevOps automation and deployment efficiency', 'NEW', 0, 0)
 ON CONFLICT DO NOTHING;
 
 INSERT INTO campaign_leads (campaign_id, lead_id, emails_sent) VALUES

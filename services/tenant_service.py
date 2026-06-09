@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from cryptography.fernet import Fernet
 
 from config.settings import settings
-from utils.db_connection import dict_from_row, get_conn
+from utils.db_connection import dict_from_row, get_conn, using_postgres
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,23 @@ def parse_iso(value: Any) -> datetime.datetime | None:
     except ValueError:
         return None
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=datetime.UTC)
+
+
+def _upsert_organization_user(conn, organization_id: int, user_id: int, role: str, status: str) -> None:
+    if using_postgres():
+        conn.execute(
+            "INSERT INTO organization_users (organization_id, user_id, role, status) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT (organization_id, user_id) DO UPDATE SET "
+            "role = excluded.role, status = excluded.status",
+            (organization_id, user_id, role, status),
+        )
+        return
+    conn.execute(
+        "INSERT OR REPLACE INTO organization_users "
+        "(organization_id, user_id, role, status) VALUES (?, ?, ?, ?)",
+        (organization_id, user_id, role, status),
+    )
 
 
 def normalize_email(email: str | None) -> str:
@@ -585,11 +602,7 @@ def create_organization(
             organization_id = cur.lastrowid
             if owner_email:
                 owner_user_id = upsert_user_by_email(conn, owner_email, platform_role="user")
-                conn.execute(
-                    "INSERT OR REPLACE INTO organization_users "
-                    "(organization_id, user_id, role, status) VALUES (?, ?, 'org_admin', 'ACTIVE')",
-                    (organization_id, owner_user_id),
-                )
+                _upsert_organization_user(conn, organization_id, owner_user_id, "org_admin", "ACTIVE")
             conn.execute(
                 "INSERT INTO events (type, payload, metadata) VALUES (?, ?, ?)",
                 (
@@ -692,11 +705,7 @@ def upsert_org_user(
     with get_conn() as conn:
         with conn:
             user_id = upsert_user_by_email(conn, email)
-            conn.execute(
-                "INSERT OR REPLACE INTO organization_users "
-                "(organization_id, user_id, role, status) VALUES (?, ?, ?, ?)",
-                (organization_id, user_id, role, status),
-            )
+            _upsert_organization_user(conn, organization_id, user_id, role, status)
             conn.execute(
                 "INSERT INTO events (type, payload, metadata) VALUES (?, ?, ?)",
                 (

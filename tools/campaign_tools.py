@@ -5,7 +5,7 @@ from typing import Optional
 
 from agents import function_tool
 from schema.outreach import CampaignInfo, CampaignCreate, CampaignUpdate
-from utils.db_connection import get_conn, sql_random_order, using_aurora
+from utils.db_connection import get_conn, sql_random_order, using_postgres
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +124,7 @@ def create_campaign(campaign: CampaignCreate, organization_id: int = 1) -> Optio
                 campaign.auto_approve_monitor_replies,
                 campaign.max_emails_per_lead,
             )
-            if using_aurora():
+            if using_postgres():
                 cur = conn.execute(
                     """
                     INSERT INTO campaigns (
@@ -190,8 +190,8 @@ def update_campaign(campaign_id: int, updates: CampaignUpdate, organization_id: 
 
         with get_conn() as conn:
             set_clause = ", ".join(update_fields)
-            if using_aurora():
-                # Data API often does not populate numberOfRecordsUpdated for UPDATE; use RETURNING.
+            if using_postgres():
+                # PostgreSQL/Data API may not expose useful rowcount consistently; use RETURNING.
                 cols_sql = ", ".join(_CAMP_COLS)
                 where = "id = ?"
                 if organization_id is not None:

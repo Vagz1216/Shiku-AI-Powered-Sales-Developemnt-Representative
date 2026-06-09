@@ -131,12 +131,12 @@ CREATE TABLE IF NOT EXISTS mailbox_connections (
     status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','CONNECTED','FAILED','DISABLED')),
     smtp_host TEXT,
     smtp_port INTEGER,
-    smtp_use_ssl BOOLEAN NOT NULL DEFAULT TRUE,
+    smtp_use_ssl INTEGER NOT NULL DEFAULT 1 CHECK(smtp_use_ssl IN (0,1)),
     smtp_username TEXT,
     smtp_password_secret TEXT,
     imap_host TEXT,
     imap_port INTEGER,
-    imap_use_ssl BOOLEAN NOT NULL DEFAULT TRUE,
+    imap_use_ssl INTEGER NOT NULL DEFAULT 1 CHECK(imap_use_ssl IN (0,1)),
     imap_username TEXT,
     imap_password_secret TEXT,
     resend_domain TEXT,
@@ -166,7 +166,7 @@ CREATE TABLE IF NOT EXISTS leads (
     industry TEXT,
     pain_points TEXT,
     status TEXT NOT NULL DEFAULT 'NEW' CHECK(status IN ('NEW','CONTACTED','WARM','QUALIFIED','MEETING_PROPOSED','MEETING_BOOKED','COLD','OPTED_OUT')),
-    email_opt_out BOOLEAN NOT NULL DEFAULT FALSE,
+    email_opt_out INTEGER NOT NULL DEFAULT 0 CHECK(email_opt_out IN (0,1)),
     touch_count INTEGER NOT NULL DEFAULT 0,
     last_contacted_at TIMESTAMP,
     last_inbound_at TIMESTAMP,
@@ -184,8 +184,8 @@ CREATE TABLE IF NOT EXISTS campaigns (
     meeting_delay_days INTEGER NOT NULL DEFAULT 1,
     max_leads_per_campaign INTEGER,
     lead_selection_order TEXT NOT NULL DEFAULT 'newest_first',
-    auto_approve_drafts BOOLEAN NOT NULL DEFAULT FALSE,
-    auto_approve_monitor_replies BOOLEAN NOT NULL DEFAULT FALSE,
+    auto_approve_drafts INTEGER NOT NULL DEFAULT 0 CHECK(auto_approve_drafts IN (0,1)),
+    auto_approve_monitor_replies INTEGER NOT NULL DEFAULT 0 CHECK(auto_approve_monitor_replies IN (0,1)),
     max_emails_per_lead INTEGER NOT NULL DEFAULT 5,
     UNIQUE (organization_id, name)
 );
@@ -194,8 +194,8 @@ CREATE TABLE IF NOT EXISTS campaign_leads (
     campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
     lead_id INTEGER NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
     emails_sent INTEGER NOT NULL DEFAULT 0,
-    responded BOOLEAN NOT NULL DEFAULT FALSE,
-    meeting_booked BOOLEAN NOT NULL DEFAULT FALSE,
+    responded INTEGER NOT NULL DEFAULT 0 CHECK(responded IN (0,1)),
+    meeting_booked INTEGER NOT NULL DEFAULT 0 CHECK(meeting_booked IN (0,1)),
     PRIMARY KEY (campaign_id, lead_id)
 );
 
@@ -238,7 +238,7 @@ CREATE TABLE IF NOT EXISTS campaign_sequence_steps (
     delay_days INTEGER NOT NULL DEFAULT 3,
     subject_template TEXT,
     body_template TEXT,
-    active BOOLEAN NOT NULL DEFAULT TRUE,
+    active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     UNIQUE (campaign_id, step_number)
 );
@@ -254,7 +254,7 @@ CREATE TABLE IF NOT EXISTS email_messages (
     body TEXT,
     status TEXT,
     intent TEXT,
-    processed BOOLEAN NOT NULL DEFAULT FALSE,
+    processed INTEGER NOT NULL DEFAULT 0 CHECK(processed IN (0,1)),
     approved INTEGER NOT NULL DEFAULT 0 CHECK(approved IN (0,1,-1)),
     approved_by TEXT,
     approved_at TIMESTAMP,
@@ -305,7 +305,7 @@ CREATE TABLE IF NOT EXISTS outbound_webhooks (
     target_url TEXT NOT NULL,
     event_types TEXT NOT NULL DEFAULT 'all',
     secret TEXT,
-    active BOOLEAN NOT NULL DEFAULT TRUE,
+    active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP
 );
@@ -341,7 +341,7 @@ CREATE TABLE IF NOT EXISTS llm_usage_events (
     estimated_cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
     pricing_source TEXT,
     pricing_version TEXT,
-    fallback_triggered BOOLEAN NOT NULL DEFAULT FALSE,
+    fallback_triggered INTEGER NOT NULL DEFAULT 0 CHECK(fallback_triggered IN (0,1)),
     attempt_count INTEGER NOT NULL DEFAULT 1,
     tool_call_count INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'success' CHECK(status IN ('success','error')),

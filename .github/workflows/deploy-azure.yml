@@ -1,0 +1,94 @@
+name: Deploy Azure
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: azure-production-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy_backend:
+    name: Deploy backend to Azure Container Apps
+    runs-on: ubuntu-latest
+    environment: azure-production
+    env:
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      AZURE_CONTAINER_REGISTRY_NAME: ${{ vars.AZURE_CONTAINER_REGISTRY_NAME }}
+      AZURE_CONTAINER_REGISTRY_LOGIN_SERVER: ${{ vars.AZURE_CONTAINER_REGISTRY_LOGIN_SERVER }}
+      AZURE_CONTAINER_APP_NAME: ${{ vars.AZURE_CONTAINER_APP_NAME }}
+      IMAGE_NAME: shiku-api
+    steps:
+      - name: Skip when Azure backend deployment config is missing
+        if: env.AZURE_CLIENT_ID == '' || env.AZURE_TENANT_ID == '' || env.AZURE_SUBSCRIPTION_ID == '' || env.AZURE_RESOURCE_GROUP == '' || env.AZURE_CONTAINER_REGISTRY_NAME == '' || env.AZURE_CONTAINER_REGISTRY_LOGIN_SERVER == '' || env.AZURE_CONTAINER_APP_NAME == ''
+        run: |
+          echo "::notice::Skipping Azure backend deploy. Configure the azure-production environment secrets/vars listed in docs/DEPLOY_AZURE.md."
+
+      - uses: actions/checkout@v4
+        if: env.AZURE_CLIENT_ID != '' && env.AZURE_TENANT_ID != '' && env.AZURE_SUBSCRIPTION_ID != '' && env.AZURE_RESOURCE_GROUP != '' && env.AZURE_CONTAINER_REGISTRY_NAME != '' && env.AZURE_CONTAINER_REGISTRY_LOGIN_SERVER != '' && env.AZURE_CONTAINER_APP_NAME != ''
+
+      - name: Azure login via OIDC
+        if: env.AZURE_CLIENT_ID != '' && env.AZURE_TENANT_ID != '' && env.AZURE_SUBSCRIPTION_ID != '' && env.AZURE_RESOURCE_GROUP != '' && env.AZURE_CONTAINER_REGISTRY_NAME != '' && env.AZURE_CONTAINER_REGISTRY_LOGIN_SERVER != '' && env.AZURE_CONTAINER_APP_NAME != ''
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build and push backend image
+        if: env.AZURE_CLIENT_ID != '' && env.AZURE_TENANT_ID != '' && env.AZURE_SUBSCRIPTION_ID != '' && env.AZURE_RESOURCE_GROUP != '' && env.AZURE_CONTAINER_REGISTRY_NAME != '' && env.AZURE_CONTAINER_REGISTRY_LOGIN_SERVER != '' && env.AZURE_CONTAINER_APP_NAME != ''
+        run: |
+          IMAGE="${AZURE_CONTAINER_REGISTRY_LOGIN_SERVER}/${IMAGE_NAME}:${GITHUB_SHA}"
+          az acr login --name "$AZURE_CONTAINER_REGISTRY_NAME"
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+      - name: Update container app
+        if: env.AZURE_CLIENT_ID != '' && env.AZURE_TENANT_ID != '' && env.AZURE_SUBSCRIPTION_ID != '' && env.AZURE_RESOURCE_GROUP != '' && env.AZURE_CONTAINER_REGISTRY_NAME != '' && env.AZURE_CONTAINER_REGISTRY_LOGIN_SERVER != '' && env.AZURE_CONTAINER_APP_NAME != ''
+        run: |
+          az containerapp update \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$AZURE_CONTAINER_APP_NAME" \
+            --image "$IMAGE"
+
+  deploy_frontend:
+    name: Deploy frontend to Azure Static Web Apps
+    runs-on: ubuntu-latest
+    environment: azure-production
+    env:
+      AZURE_STATIC_WEB_APPS_API_TOKEN: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+      NEXT_PUBLIC_API_URL: ${{ vars.NEXT_PUBLIC_API_URL }}
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ vars.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+    steps:
+      - name: Skip when Static Web Apps deployment config is missing
+        if: env.AZURE_STATIC_WEB_APPS_API_TOKEN == '' || env.NEXT_PUBLIC_API_URL == '' || env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY == ''
+        run: |
+          echo "::notice::Skipping Azure frontend deploy. Configure AZURE_STATIC_WEB_APPS_API_TOKEN, NEXT_PUBLIC_API_URL, and NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY."
+
+      - uses: actions/checkout@v4
+        if: env.AZURE_STATIC_WEB_APPS_API_TOKEN != '' && env.NEXT_PUBLIC_API_URL != '' && env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY != ''
+
+      - name: Deploy static frontend
+        if: env.AZURE_STATIC_WEB_APPS_API_TOKEN != '' && env.NEXT_PUBLIC_API_URL != '' && env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY != ''
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ env.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: upload
+          app_location: frontend
+          output_location: out
+          app_build_command: npm run build
+        env:
+          NEXT_PUBLIC_API_URL: ${{ env.NEXT_PUBLIC_API_URL }}
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}

@@ -8,7 +8,7 @@ from utils.db_connection import (
     dict_from_row,
     sql_order_by_datetime,
     sql_random_order,
-    using_aurora,
+    using_postgres,
 )
 from .data_provider import LeadProvider
 from config.settings import settings
@@ -305,17 +305,17 @@ class DBLeadProvider(LeadProvider):
     
     def get_leads(self, campaign_id: Optional[int] = None, max_leads: Optional[int] = None, order_by: str = 'newest_first', organization_id: Optional[int] = None) -> Dict[str, Any]:
         conn = get_conn()
-        if using_aurora():
+        if using_postgres():
             select_sql = """
             SELECT l.id, l.name, l.email, l.company, l.industry, l.pain_points, l.status,
                    l.touch_count, l.created_at,
                    MAX(cl.emails_sent) AS emails_sent,
-                   bool_or(cl.responded) AS responded,
-                   bool_or(cl.meeting_booked) AS meeting_booked
+                   MAX(cl.responded) AS responded,
+                   MAX(cl.meeting_booked) AS meeting_booked
             FROM leads l
             JOIN campaign_leads cl ON cl.lead_id = l.id
             JOIN campaigns c ON c.id = cl.campaign_id
-            WHERE l.email_opt_out = FALSE
+            WHERE l.email_opt_out = 0
               AND c.status = 'ACTIVE'
               AND cl.emails_sent < c.max_emails_per_lead
             """

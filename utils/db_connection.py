@@ -1,11 +1,11 @@
-"""Database connection layer supporting SQLite (local) and Aurora Data API (production)."""
+"""Database connection layer supporting SQLite, Aurora Data API, and PostgreSQL."""
 
 import os
 import re
 import sqlite3
 import threading
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -19,13 +19,53 @@ _bootstrap_done: set[str] = set()
 _bootstrap_lock = threading.Lock()
 
 
+_POSTGRES_ID_TABLES = {
+    "ai_usage_actions",
+    "app_users",
+    "campaign_sequence_steps",
+    "campaigns",
+    "email_attachments",
+    "email_messages",
+    "events",
+    "leads",
+    "llm_usage_events",
+    "mailbox_connections",
+    "meetings",
+    "organization_billing_periods",
+    "organization_subscriptions",
+    "organizations",
+    "outbound_webhooks",
+    "platform_cost_allocations",
+    "platform_usage_events",
+    "staff",
+    "subscription_plans",
+    "webhook_deliveries",
+}
+
+
 def _is_aurora() -> bool:
     return bool(os.environ.get("DB_CLUSTER_ARN"))
+
+
+def _database_url() -> str:
+    from config.settings import settings
+
+    return settings.database_url or ""
+
+
+def _is_postgres_url(url: str | None = None) -> bool:
+    value = (url if url is not None else _database_url()).lower()
+    return value.startswith(("postgres://", "postgresql://"))
 
 
 def using_aurora() -> bool:
     """True when app should use Aurora Data API (same as Terraform/App Runner DB env)."""
     return _is_aurora()
+
+
+def using_postgres() -> bool:
+    """True when the active database speaks PostgreSQL SQL semantics."""
+    return _is_aurora() or _is_postgres_url()
 
 
 class AuroraConnection:
@@ -152,34 +192,130 @@ def _sqlite_to_pg(sql: str, params: tuple) -> tuple[str, list[dict]]:
     return pg_sql, pg_params
 
 
+class PostgresConnection:
+    """Small psycopg wrapper that mirrors the sqlite3 connection surface used by services."""
+
+    def __init__(self, database_url: str):
+        import psycopg
+        from psycopg.rows import dict_row
+
+        self._conn = psycopg.connect(database_url, row_factory=dict_row)
+
+    def execute(self, sql: str, params: tuple = ()) -> "PostgresCursor":
+        pg_sql, auto_returning_id = _sqlite_to_psycopg_sql(sql)
+        try:
+            cur = self._conn.execute(pg_sql, params)
+            return PostgresCursor(cur, auto_returning_id=auto_returning_id)
+        except Exception as e:
+            logger.error(f"PostgreSQL SQL error: {e}\nSQL: {pg_sql}")
+            raise
+
+    def executescript(self, script: str):
+        for stmt in _split_sql_script(script):
+            self.execute(stmt)
+
+    def commit(self):
+        self._conn.commit()
+
+    def close(self):
+        self._conn.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type:
+            self._conn.rollback()
+        else:
+            self._conn.commit()
+        return False
+
+
+class PostgresCursor:
+    """Wraps a psycopg cursor with sqlite-like lastrowid behavior."""
+
+    def __init__(self, cursor, *, auto_returning_id: bool = False):
+        self._cursor = cursor
+        self._buffer: list[dict[str, Any]] = []
+        self.rowcount = cursor.rowcount
+        self.lastrowid = None
+        if auto_returning_id:
+            try:
+                row = cursor.fetchone()
+                if row:
+                    self._buffer.append(row)
+                    self.lastrowid = row.get("id")
+            except Exception:
+                self.lastrowid = None
+
+    def fetchone(self) -> Optional[dict]:
+        if self._buffer:
+            return self._buffer.pop(0)
+        return self._cursor.fetchone()
+
+    def fetchall(self) -> list[dict]:
+        rows = self._buffer + list(self._cursor.fetchall())
+        self._buffer = []
+        return rows
+
+
+def _split_sql_script(script: str) -> list[str]:
+    cleaned_lines = [
+        line for line in script.splitlines()
+        if line.strip() and not line.lstrip().startswith("--")
+    ]
+    cleaned = "\n".join(cleaned_lines)
+    return [stmt.strip() for stmt in cleaned.split(";") if stmt.strip()]
+
+
+def _sqlite_to_psycopg_sql(sql: str) -> tuple[str, bool]:
+    """Translate the app's SQLite-style parameter SQL to psycopg/PostgreSQL SQL."""
+    stripped = sql.strip()
+    upper = stripped.upper()
+    if upper.startswith("PRAGMA"):
+        return "SELECT 1", False
+    pg_sql = re.sub(r"\?", "%s", sql)
+    pg_sql = re.sub(r"\bINSERT\s+OR\s+IGNORE\s+INTO\b", "INSERT INTO", pg_sql, flags=re.IGNORECASE)
+
+    auto_returning_id = False
+    if upper.startswith("INSERT") and " RETURNING " not in upper:
+        match = re.match(r"\s*INSERT\s+(?:OR\s+\w+\s+)?INTO\s+([a-zA-Z_][a-zA-Z0-9_]*)", sql, flags=re.IGNORECASE)
+        table = match.group(1).lower() if match else ""
+        if table in _POSTGRES_ID_TABLES:
+            pg_sql = pg_sql.rstrip().rstrip(";") + " RETURNING id"
+            auto_returning_id = True
+
+    return pg_sql, auto_returning_id
+
+
 def sql_group_concat_distinct(column: str, separator: str = ", ") -> str:
-    """SQLite GROUP_CONCAT vs PostgreSQL string_agg for Aurora."""
+    """SQLite GROUP_CONCAT vs PostgreSQL string_agg."""
     esc = separator.replace("'", "''")
-    if _is_aurora():
+    if using_postgres():
         return f"COALESCE(string_agg(DISTINCT {column}::text, '{esc}'), '')"
     return f"COALESCE(GROUP_CONCAT(DISTINCT {column}), '')"
 
 
 def sql_order_by_datetime(column: str) -> str:
     """SQLite datetime(col) vs PostgreSQL timestamp ordering."""
-    if _is_aurora():
+    if using_postgres():
         return column
     return f"datetime({column})"
 
 
 def sql_random_order() -> str:
     """SQLite RANDOM() vs PostgreSQL random()."""
-    return "random()" if _is_aurora() else "RANDOM()"
+    return "random()" if using_postgres() else "RANDOM()"
 
 
 def sql_bool_true() -> str:
-    """SQL literal true: BOOLEAN in PostgreSQL, 1 for SQLite INTEGER-as-bool columns."""
-    return "TRUE" if _is_aurora() else "1"
+    """SQL literal true for the app's integer-backed boolean columns."""
+    return "1"
 
 
 def sql_bool_false() -> str:
-    """SQL literal false: BOOLEAN in PostgreSQL, 0 for SQLite INTEGER-as-bool columns."""
-    return "FALSE" if _is_aurora() else "0"
+    """SQL literal false for the app's integer-backed boolean columns."""
+    return "0"
 
 
 def _ensure_db_dir():
@@ -187,14 +323,14 @@ def _ensure_db_dir():
 
 
 def _resolve_db_path() -> str:
-    from config.settings import settings
-    if settings.database_url:
-        if settings.database_url.startswith("sqlite:///"):
-            db_file = settings.database_url.replace("sqlite:///", "")
+    database_url = _database_url()
+    if database_url:
+        if database_url.startswith("sqlite:///"):
+            db_file = database_url.replace("sqlite:///", "")
             if not os.path.isabs(db_file):
                 db_file = os.path.join(ROOT, db_file)
         else:
-            db_file = settings.database_url
+            db_file = database_url
     else:
         _ensure_db_dir()
         db_file = DEFAULT_DB_FILE
@@ -633,13 +769,18 @@ def _bootstrap_schema(conn: sqlite3.Connection, db_file: str):
 
 def get_conn():
     """Return a database connection.
-    Aurora Data API when DB_CLUSTER_ARN is set, otherwise SQLite."""
+    Aurora Data API when DB_CLUSTER_ARN is set, PostgreSQL when DATABASE_URL is
+    postgresql://, otherwise SQLite."""
     if _is_aurora():
         return AuroraConnection(
             cluster_arn=os.environ["DB_CLUSTER_ARN"],
             secret_arn=os.environ["DB_SECRET_ARN"],
             database=os.environ.get("DB_NAME", "sdr"),
         )
+
+    database_url = _database_url()
+    if _is_postgres_url(database_url):
+        return PostgresConnection(database_url)
 
     db_file = _resolve_db_path()
     conn = sqlite3.connect(

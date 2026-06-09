@@ -10,7 +10,7 @@ from functools import lru_cache
 from typing import Any
 
 from config import settings
-from utils.db_connection import dict_from_row, get_conn
+from utils.db_connection import dict_from_row, get_conn, sql_group_concat_distinct
 
 logger = logging.getLogger(__name__)
 
@@ -237,6 +237,7 @@ def get_usage_summary(limit: int = 100, organization_id: int | None = None) -> d
                 params,
             ).fetchone()
         ) or {}
+        pricing_sources_sql = sql_group_concat_distinct("COALESCE(pricing_source, 'unknown')")
         by_model = [
             dict_from_row(row)
             for row in conn.execute(
@@ -247,7 +248,7 @@ def get_usage_summary(limit: int = 100, organization_id: int | None = None) -> d
                 "COALESCE(SUM(estimated_cost_usd), 0) AS estimated_cost_usd, "
                 "COALESCE(SUM(CASE WHEN pricing_source = 'unpriced' THEN 1 ELSE 0 END), 0) AS unpriced_count, "
                 "COALESCE(SUM(CASE WHEN estimated_cost_usd = 0 AND pricing_source != 'unpriced' THEN 1 ELSE 0 END), 0) AS zero_cost_priced_count, "
-                "GROUP_CONCAT(DISTINCT COALESCE(pricing_source, 'unknown')) AS pricing_sources, "
+                f"{pricing_sources_sql} AS pricing_sources, "
                 "COALESCE(AVG(latency_ms), 0) AS avg_latency_ms "
                 f"FROM llm_usage_events {where} GROUP BY provider, model "
                 "ORDER BY estimated_cost_usd DESC, total_tokens DESC",

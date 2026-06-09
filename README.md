@@ -84,17 +84,18 @@ graph TB
 ## Repo Layout
 
 *   `main.py`: FastAPI app (API + optional Gradio legacy routes)
-*   `frontend/`: Next.js 16 app (Clerk + static export for S3 hosting)
+*   `frontend/`: Next.js 16 app (Clerk + static export for S3/Azure Static Web Apps hosting)
 *   `config/`: Environment settings and logging configuration
 *   `outreach/`: Campaign orchestration agent
 *   `email_monitor/`: Inbound monitoring pipeline, intent extraction, and Llama Guard security
 *   `tools/`: Agent-callable tools for campaigns, email, staff availability, and meetings
 *   `services/`: Data Adapter Pattern implementation (SQLite/CRM routing)
 *   `schema/`: Shared Pydantic models enforcing Structured Outputs
-*   `db/`: SQLite and PostgreSQL schema/seed (`schema_pg.sql`, `seed_pg.sql` for Aurora)
-*   `utils/db_connection.py`: SQLite locally; **Aurora Data API** when `DB_CLUSTER_ARN` / `DB_SECRET_ARN` are set
+*   `db/`: SQLite and PostgreSQL schema/seed (`schema_pg.sql`, `seed_pg.sql` for Aurora/Azure PostgreSQL)
+*   `utils/db_connection.py`: SQLite locally; **Aurora Data API** when `DB_CLUSTER_ARN` / `DB_SECRET_ARN` are set; standard PostgreSQL when `DATABASE_URL=postgresql://...`
 *   `terraform/`: IaC for database, backend (ECR + App Runner), frontend (S3 + CloudFront)
 *   `docs/DEPLOY_AWS.md`: Step-by-step AWS deploy and operations
+*   `docs/DEPLOY_AZURE.md`: Azure Container Apps, Azure PostgreSQL, Static Web Apps, and GitHub OIDC deploy guide
 *   `implementation.md`: Architecture notes and checklist
 
 ## Requirements
@@ -171,7 +172,7 @@ npm install
 npm run build                # produces frontend/out/
 ```
 
-Set `NEXT_PUBLIC_API_URL` to your **CloudFront** URL in production so the browser calls the API through the same domain.
+Set `NEXT_PUBLIC_API_URL` to your production API URL (CloudFront/App Runner on AWS, or Azure Container Apps/Front Door on Azure) so the browser calls the deployed backend.
 
 ## Non-AWS deployment (recommended first)
 
@@ -195,6 +196,17 @@ The GitHub Actions pipeline runs backend tests, frontend lint/build, and deploys
 Inbound webhooks (e.g. AgentMail) should target **`POST https://<your-cloudfront-domain>/webhook`**.
 
 Full detail: **`docs/DEPLOY_AWS.md`**.
+
+## Azure deployment (summary)
+
+1. **Azure Database for PostgreSQL Flexible Server** — set `DATABASE_URL=postgresql://...?...sslmode=require`.
+2. **`scripts/apply_postgres_schema.py`** — apply `db/schema_pg.sql` to the Azure PostgreSQL database.
+3. **Azure Container Registry** — store the backend Docker image built from the root `Dockerfile`.
+4. **Azure Container Apps** — run the FastAPI backend container on port `8000`.
+5. **Azure Static Web Apps** — host the static `frontend/out/` dashboard.
+6. **GitHub Actions OIDC** — deploy from `.github/workflows/deploy-azure.yml` without requiring a human Azure login.
+
+Use **`.env.azure.example`** as the production environment handoff template. Full detail: **`docs/DEPLOY_AZURE.md`**.
 
 ## GitHub and secrets
 

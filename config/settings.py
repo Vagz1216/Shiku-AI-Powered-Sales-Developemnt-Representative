@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -54,11 +54,12 @@ class AppConfig(BaseSettings):
         gt=0, le=65535
     )
 
-    # Database - SQLite (local) or Aurora Data API (production)
+    # Database - SQLite (local), PostgreSQL URL (Azure/standard managed Postgres),
+    # or Aurora Data API (AWS production)
     database_url: str = Field(
         default="sqlite:///./db/sdr.sqlite3",
         validation_alias="DATABASE_URL",
-        description="Database URL (default: SQLite next to db/schema.sql)",
+        description="Database URL: sqlite:///... locally or postgresql://... for standard managed Postgres",
     )
     db_cluster_arn: str | None = Field(
         default=None,
@@ -225,10 +226,55 @@ class AppConfig(BaseSettings):
         validation_alias="NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY",
         description="Frontend Clerk publishable key carried in root .env for local builds",
     )
+    next_public_api_url: str | None = Field(
+        default=None,
+        validation_alias="NEXT_PUBLIC_API_URL",
+        description="Frontend API URL carried in root .env for local/static builds",
+    )
     vercel_oidc_token: str | None = Field(
         default=None,
         validation_alias="VERCEL_OIDC_TOKEN",
         description="Optional Vercel OIDC token ignored by backend runtime",
+    )
+    azure_client_id: str | None = Field(
+        default=None,
+        validation_alias="AZURE_CLIENT_ID",
+        description="GitHub OIDC Azure client id; accepted so shared env templates stay loadable",
+    )
+    azure_tenant_id: str | None = Field(
+        default=None,
+        validation_alias="AZURE_TENANT_ID",
+        description="GitHub OIDC Azure tenant id; ignored by backend runtime",
+    )
+    azure_subscription_id: str | None = Field(
+        default=None,
+        validation_alias="AZURE_SUBSCRIPTION_ID",
+        description="GitHub OIDC Azure subscription id; ignored by backend runtime",
+    )
+    azure_resource_group: str | None = Field(
+        default=None,
+        validation_alias="AZURE_RESOURCE_GROUP",
+        description="Azure deployment resource group; ignored by backend runtime",
+    )
+    azure_container_registry_name: str | None = Field(
+        default=None,
+        validation_alias="AZURE_CONTAINER_REGISTRY_NAME",
+        description="Azure Container Registry name; ignored by backend runtime",
+    )
+    azure_container_registry_login_server: str | None = Field(
+        default=None,
+        validation_alias="AZURE_CONTAINER_REGISTRY_LOGIN_SERVER",
+        description="Azure Container Registry login server; ignored by backend runtime",
+    )
+    azure_container_app_name: str | None = Field(
+        default=None,
+        validation_alias="AZURE_CONTAINER_APP_NAME",
+        description="Azure Container App name; ignored by backend runtime",
+    )
+    azure_static_web_apps_api_token: str | None = Field(
+        default=None,
+        validation_alias="AZURE_STATIC_WEB_APPS_API_TOKEN",
+        description="Azure Static Web Apps deployment token; ignored by backend runtime",
     )
 
     # Model Parameters - Intent Extraction
@@ -403,6 +449,13 @@ class AppConfig(BaseSettings):
         gt=0,
         le=20,
     )
+
+    @field_validator("default_mailbox_id", mode="before")
+    @classmethod
+    def _blank_default_mailbox_id(cls, value):
+        if value == "":
+            return None
+        return value
 
     # Multi-key helpers: split comma-separated values into lists
     @property
