@@ -83,6 +83,11 @@ class AppConfig(BaseSettings):
         validation_alias="OPENAI_API_KEY",
         description="OpenAI API key for AI model access",
     )
+    openai_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("OPENAI_BASE_URL", "LITELLM_BASE_URL"),
+        description="Optional OpenAI-compatible base URL, for example a LiteLLM proxy ending in /v1",
+    )
     azure_openai_api_key: str | None = Field(
         default=None,
         validation_alias="AZURE_OPENAI_API_KEY",

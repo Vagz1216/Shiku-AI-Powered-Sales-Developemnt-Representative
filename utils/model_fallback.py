@@ -50,6 +50,8 @@ if settings.openai_api_key:
     # Ensure it's in environment for underlying SDKs
     if not os.environ.get("OPENAI_API_KEY"):
         os.environ["OPENAI_API_KEY"] = settings.openai_api_key
+    if settings.openai_base_url and not os.environ.get("OPENAI_BASE_URL"):
+        os.environ["OPENAI_BASE_URL"] = settings.openai_base_url
     # Set it for the agents library tracing and default operations
     set_default_openai_key(settings.openai_api_key)
 
@@ -159,8 +161,9 @@ def get_available_providers() -> List[ModelProviderInfo]:
     all_configured = []
     if settings.azure_openai_api_key and settings.azure_openai_endpoint and settings.azure_openai_deployment:
         all_configured.append("AzureOpenAI")
+    openai_provider_name = "OpenAICompatible" if settings.openai_base_url else "OpenAI"
     if settings.openai_api_key:
-        all_configured.append("OpenAI")
+        all_configured.append(openai_provider_name)
     for i, _ in enumerate(settings.groq_api_keys):
         all_configured.append(f"Groq{_suffix(i)}")
     for i, _ in enumerate(settings.cerebras_api_keys):
@@ -186,11 +189,13 @@ def get_available_providers() -> List[ModelProviderInfo]:
             provider=_make_azure_provider(),
         ))
 
-    # ── 2. OPENAI (paid, most capable, reliable tool calling + json_schema) ──
-    if settings.openai_api_key and not is_blacklisted("OpenAI"):
+    # ── 2. OPENAI / OPENAI-COMPATIBLE (direct OpenAI or LiteLLM proxy) ──
+    if settings.openai_api_key and not is_blacklisted(openai_provider_name):
+        provider = _make_provider(settings.openai_api_key, settings.openai_base_url) if settings.openai_base_url else None
         providers.append(ModelProviderInfo(
-            name="OpenAI",
+            name=openai_provider_name,
             model=settings.outreach_model,
+            provider=provider,
         ))
 
     # ── 3. GROQ (free, fast, 70B — good fallback but no json_schema) ──
