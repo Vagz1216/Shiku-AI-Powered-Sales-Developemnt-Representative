@@ -66,11 +66,11 @@ def test_pricing_covers_configured_fallback_models():
         ("Groq-2", "llama-3.3-70b-versatile"),
         ("Cerebras", "gpt-oss-120b"),
         ("Cerebras-2", "gpt-oss-120b"),
-        ("Meta", "meta-llama/llama-4-maverick"),
-        ("OpenRouter-Llama", "meta-llama/llama-3.3-70b-instruct"),
-        ("DeepSeek", "deepseek/deepseek-v3.2"),
-        ("Google", "google/gemini-2.5-flash"),
-        ("Anthropic", "anthropic/claude-sonnet-4.6"),
+        ("Meta", "meta-llama/llama-3.2-3b-instruct:free"),
+        ("OpenRouter-Llama", "meta-llama/llama-3.1-8b-instruct:free"),
+        ("DeepSeek", "qwen/qwen-2-7b-instruct:free"),
+        ("Google", "google/gemini-2.0-flash-lite-preview-02-05:free"),
+        ("OpenRouter-Auto", "openrouter/free"),
     ]
 
     for provider, model in fallback_models:
