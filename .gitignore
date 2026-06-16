@@ -91,3 +91,9 @@ out/
 frontend/out/
 .vercel/
 frontend/.vercel/
+
+# AI and local temp files
+.codex
+CLAUDE.md
+backendenv.txt
+
