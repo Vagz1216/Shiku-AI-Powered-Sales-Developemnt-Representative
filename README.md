@@ -102,9 +102,22 @@ graph TB
 
 *   Python 3.12+
 *   `uv` package manager
-*   OpenAI API key
+*   At least one AI provider API key (see Multi-Provider Fallback below)
 *   AgentMail inbox and API key for real email delivery
 *   Optional: Composio credentials for automatic Google Calendar meeting creation
+
+### Multi-Provider AI Fallback
+
+The system supports automatic failover across multiple AI providers. Configure one or more in your `.env`:
+
+| Priority | Provider | Env Var(s) | Notes |
+|----------|----------|-----------|-------|
+| 1 | Azure OpenAI | `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT` | Enterprise primary |
+| 2 | OpenAI | `OPENAI_API_KEY` | Direct OpenAI API |
+| 3 | Groq | `GROQ_API_KEY` | Fast; skipped for JSON-schema tasks |
+| 4 | Cerebras | `CEREBRAS_API_KEY` | Fast; skipped for tool-calling tasks |
+| 5 | Google Gemini | `GEMINI_API_KEY` | Native Gemini API via OpenAI-compatible endpoint |
+| 6 | OpenRouter | `OPENROUTER_API_KEY` | Aggregator with multiple free model fallbacks |
 
 ## Environment Setup
 
@@ -113,7 +126,7 @@ graph TB
    cp .env.example .env
    ```
 2. Fill in the required values in `.env`:
-*   `OPENAI_API_KEY` or Azure OpenAI settings (`AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT`)
+*   At least one AI provider key: `OPENAI_API_KEY`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `CEREBRAS_API_KEY`, `OPENROUTER_API_KEY`, or Azure OpenAI settings (`AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT`)
    *   `AGENTMAIL_API_KEY`
    *   `AGENTMAIL_INBOX_ID`
    *   `DATA_SOURCE` (Optional: set to `CRM` to test the Adapter Pattern dummy logic)

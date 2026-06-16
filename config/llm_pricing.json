@@ -46,51 +46,59 @@
     },
     {
       "provider": "Cerebras",
-      "model": "llama3.1-8b",
+      "model": "gpt-oss-120b",
       "input_usd_per_1m": 0,
       "cached_input_usd_per_1m": 0,
       "output_usd_per_1m": 0,
-      "source": "cerebras-free-tier-or-external-verify-paid-plan"
+      "source": "cerebras-free-tier"
+    },
+    {
+      "provider": "Gemini",
+      "model": "gemini-2.5-flash",
+      "input_usd_per_1m": 0.15,
+      "cached_input_usd_per_1m": 0.0375,
+      "output_usd_per_1m": 0.6,
+      "source": "google-ai-studio-pricing-2026-06"
     },
     {
       "provider": "Meta",
-      "model": "meta-llama/llama-4-maverick",
-      "input_usd_per_1m": 0.15,
+      "model": "meta-llama/llama-3.2-3b-instruct:free",
+      "input_usd_per_1m": 0,
       "cached_input_usd_per_1m": 0,
-      "output_usd_per_1m": 0.6,
-      "source": "openrouter-pricing-2026-06-04"
+      "output_usd_per_1m": 0,
+      "source": "openrouter-free-tier"
     },
     {
       "provider": "OpenRouter-Llama",
-      "model": "meta-llama/llama-3.3-70b-instruct",
-      "input_usd_per_1m": 0.1,
+      "model": "meta-llama/llama-3.1-8b-instruct:free",
+      "input_usd_per_1m": 0,
       "cached_input_usd_per_1m": 0,
-      "output_usd_per_1m": 0.32,
-      "source": "openrouter-pricing-2026-06-04"
+      "output_usd_per_1m": 0,
+      "source": "openrouter-free-tier"
     },
     {
       "provider": "DeepSeek",
-      "model": "deepseek/deepseek-v3.2",
-      "input_usd_per_1m": 0.2288,
+      "model": "qwen/qwen-2-7b-instruct:free",
+      "input_usd_per_1m": 0,
       "cached_input_usd_per_1m": 0,
-      "output_usd_per_1m": 0.3432,
-      "source": "openrouter-pricing-2026-06-04"
+      "output_usd_per_1m": 0,
+      "source": "openrouter-free-tier"
     },
     {
       "provider": "Google",
-      "model": "google/gemini-2.5-flash",
-      "input_usd_per_1m": 0.3,
+      "model": "google/gemini-2.0-flash-lite-preview-02-05:free",
+      "input_usd_per_1m": 0,
       "cached_input_usd_per_1m": 0,
-      "output_usd_per_1m": 2.5,
-      "source": "openrouter-pricing-2026-06-04"
+      "output_usd_per_1m": 0,
+      "source": "openrouter-free-tier"
     },
     {
-      "provider": "Anthropic",
-      "model": "anthropic/claude-sonnet-4.6",
-      "input_usd_per_1m": 3,
+      "provider": "OpenRouter-Auto",
+      "model": "openrouter/free",
+      "input_usd_per_1m": 0,
       "cached_input_usd_per_1m": 0,
-      "output_usd_per_1m": 15,
-      "source": "openrouter-pricing-2026-06-04"
+      "output_usd_per_1m": 0,
+      "source": "openrouter-free-auto-router"
     }
   ]
 }

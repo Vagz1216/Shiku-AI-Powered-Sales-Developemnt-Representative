@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 _BLACKLIST = {}
 _BLACKLIST_DURATION = 300  # 5 minutes
 
-_OPENROUTER_PROVIDERS = {"Meta", "OpenRouter-Llama", "DeepSeek", "Google", "Anthropic"}
+_OPENROUTER_PROVIDERS = {"Meta", "OpenRouter-Llama", "DeepSeek", "Google", "OpenRouter-Auto"}
 
 
 def blacklist_provider(name: str):
@@ -168,9 +168,11 @@ def get_available_providers() -> List[ModelProviderInfo]:
         all_configured.append(f"Groq{_suffix(i)}")
     for i, _ in enumerate(settings.cerebras_api_keys):
         all_configured.append(f"Cerebras{_suffix(i)}")
+    if settings.gemini_api_key:
+        all_configured.append("Gemini")
     or_key = settings.openrouter_api_keys[0] if settings.openrouter_api_keys else None
     if or_key:
-        all_configured.extend(["Meta", "OpenRouter-Llama", "DeepSeek", "Google", "Anthropic"])
+        all_configured.extend(["Meta", "OpenRouter-Llama", "DeepSeek", "Google", "OpenRouter-Auto"])
 
     if all_configured and all(is_blacklisted(p) for p in all_configured):
         logger.warning("All providers blacklisted — clearing to attempt recovery.")
@@ -214,39 +216,47 @@ def get_available_providers() -> List[ModelProviderInfo]:
         if not is_blacklisted(name):
             providers.append(ModelProviderInfo(
                 name=name,
-                model="llama3.1-8b",
+                model="gpt-oss-120b",
                 provider=_make_provider(key, "https://api.cerebras.ai/v1"),
             ))
 
-    # ── 5. OPENROUTER MODELS (paid per token, shared credits) ──
+    # ── 4.5. GOOGLE GEMINI (native API) ──
+    if settings.gemini_api_key and not is_blacklisted("Gemini"):
+        providers.append(ModelProviderInfo(
+            name="Gemini",
+            model="gemini-2.5-flash",
+            provider=_make_provider(settings.gemini_api_key, "https://generativelanguage.googleapis.com/v1beta/openai/"),
+        ))
+
+    # ── 5. OPENROUTER MODELS (free tier) ──
     if or_key and not is_blacklisted("Meta"):
         providers.append(ModelProviderInfo(
             name="Meta",
-            model="meta-llama/llama-4-maverick",
+            model="meta-llama/llama-3.2-3b-instruct:free",
             provider=_make_provider(or_key, "https://openrouter.ai/api/v1"),
         ))
     if or_key and not is_blacklisted("OpenRouter-Llama"):
         providers.append(ModelProviderInfo(
             name="OpenRouter-Llama",
-            model="meta-llama/llama-3.3-70b-instruct",
+            model="meta-llama/llama-3.1-8b-instruct:free",
             provider=_make_provider(or_key, "https://openrouter.ai/api/v1"),
         ))
     if or_key and not is_blacklisted("DeepSeek"):
         providers.append(ModelProviderInfo(
             name="DeepSeek",
-            model="deepseek/deepseek-v3.2",
+            model="qwen/qwen-2-7b-instruct:free",
             provider=_make_provider(or_key, "https://openrouter.ai/api/v1"),
         ))
     if or_key and not is_blacklisted("Google"):
         providers.append(ModelProviderInfo(
             name="Google",
-            model="google/gemini-2.5-flash",
+            model="google/gemini-2.0-flash-lite-preview-02-05:free",
             provider=_make_provider(or_key, "https://openrouter.ai/api/v1"),
         ))
-    if or_key and not is_blacklisted("Anthropic"):
+    if or_key and not is_blacklisted("OpenRouter-Auto"):
         providers.append(ModelProviderInfo(
-            name="Anthropic",
-            model="anthropic/claude-sonnet-4.6",
+            name="OpenRouter-Auto",
+            model="openrouter/free",
             provider=_make_provider(or_key, "https://openrouter.ai/api/v1"),
         ))
 
@@ -354,7 +364,7 @@ async def run_agent_with_fallback(
             "Configuration Error: No API keys found for any supported AI provider. "
             "Please set Azure OpenAI (AZURE_OPENAI_API_KEY, AZURE_OPENAI_ENDPOINT, "
             "AZURE_OPENAI_DEPLOYMENT) or at least one of OPENAI_API_KEY, OPENROUTER_API_KEY, "
-            "CEREBRAS_API_KEY, or GROQ_API_KEY in your .env file."
+            "CEREBRAS_API_KEY, GEMINI_API_KEY, or GROQ_API_KEY in your .env file."
         )
 
     errors = []
