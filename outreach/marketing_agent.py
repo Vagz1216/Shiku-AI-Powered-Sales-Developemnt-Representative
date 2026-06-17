@@ -7,6 +7,7 @@ from typing import Dict, Any, Optional, Callable, Awaitable
 from config.logging import setup_logging
 from config.settings import settings
 from agents import trace, gen_trace_id
+from langfuse.decorators import observe
 
 from tools.campaign_tools import fetch_campaign_info
 from tools.send_email import send_plain_email
@@ -28,6 +29,7 @@ SSECallback = Callable[[str, str], Awaitable[None]]
 class OutreachOrchestrator:
     """Orchestrates complete database-driven outreach campaigns using Worker Agents."""
     
+    @observe()
     async def execute_campaign(
         self, 
         campaign_name: Optional[str] = None,

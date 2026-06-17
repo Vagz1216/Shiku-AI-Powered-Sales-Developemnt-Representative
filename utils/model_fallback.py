@@ -7,7 +7,8 @@ from typing import Any, Dict, List, Optional, Type, Tuple
 from pydantic import BaseModel
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
-from openai import AsyncAzureOpenAI, AsyncOpenAI
+from langfuse.openai import AsyncAzureOpenAI, AsyncOpenAI
+from langfuse.decorators import observe
 from agents import Agent, ModelSettings, Runner, set_default_openai_key
 from agents.models.openai_provider import OpenAIProvider
 from config import settings
@@ -327,6 +328,7 @@ async def _execute_with_retry(agent: Agent, prompt: str) -> Any:
         raise ProviderExecutionError(str(e))
 
 
+@observe(as_type="generation")
 async def run_agent_with_fallback(
     name: str,
     instructions: str,

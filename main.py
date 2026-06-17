@@ -22,6 +22,7 @@ import json
 from uuid import uuid4
 
 from config.logging import reset_request_id, set_request_id, setup_logging
+from langfuse.decorators import observe
 from config import settings
 from schema import WebhookEvent
 from schema.leads import ApiLeadImportRequest, BulkLeadImportRequest, LeadCreate, LeadUpdate
@@ -2072,6 +2073,7 @@ async def stream_outreach(
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 @app.post("/outreach/campaign")  
+@observe()
 async def execute_marketing_campaign(
     background_tasks: BackgroundTasks,
     campaign_name: Optional[str] = None,

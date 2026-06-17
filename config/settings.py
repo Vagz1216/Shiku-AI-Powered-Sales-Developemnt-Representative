@@ -143,6 +143,21 @@ class AppConfig(BaseSettings):
         validation_alias="GROK_API_KEY",
         description="Reserved xAI/Grok API key field so local .env validation stays strict",
     )
+    langfuse_secret_key: str | None = Field(
+        default=None,
+        validation_alias="LANGFUSE_SECRET_KEY",
+        description="Langfuse Secret Key for observability tracing",
+    )
+    langfuse_public_key: str | None = Field(
+        default=None,
+        validation_alias="LANGFUSE_PUBLIC_KEY",
+        description="Langfuse Public Key for observability tracing",
+    )
+    langfuse_host: str = Field(
+        default="https://cloud.langfuse.com",
+        validation_alias="LANGFUSE_HOST",
+        description="Langfuse Host URL",
+    )
     agentmail_api_key: str | None = Field(
         default=None,
         validation_alias="AGENTMAIL_API_KEY",

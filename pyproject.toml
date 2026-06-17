@@ -25,6 +25,7 @@ dependencies = [
     "tenacity>=9.1.4",
     "python-jose[cryptography]>=3.5.0",
     "httpx>=0.28.1",
+    "langfuse>=2.50.0",
 ]
 
 [project.scripts]
