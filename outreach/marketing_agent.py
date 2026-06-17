@@ -7,7 +7,7 @@ from typing import Dict, Any, Optional, Callable, Awaitable
 from config.logging import setup_logging
 from config.settings import settings
 from agents import trace, gen_trace_id
-from langfuse.decorators import observe
+from langfuse import observe
 
 from tools.campaign_tools import fetch_campaign_info
 from tools.send_email import send_plain_email

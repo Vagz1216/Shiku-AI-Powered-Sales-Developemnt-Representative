@@ -22,7 +22,7 @@ import json
 from uuid import uuid4
 
 from config.logging import reset_request_id, set_request_id, setup_logging
-from langfuse.decorators import observe
+from langfuse import observe
 from config import settings
 from schema import WebhookEvent
 from schema.leads import ApiLeadImportRequest, BulkLeadImportRequest, LeadCreate, LeadUpdate

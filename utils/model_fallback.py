@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from langfuse.openai import AsyncAzureOpenAI, AsyncOpenAI
-from langfuse.decorators import observe
+from langfuse import observe
 from agents import Agent, ModelSettings, Runner, set_default_openai_key
 from agents.models.openai_provider import OpenAIProvider
 from config import settings

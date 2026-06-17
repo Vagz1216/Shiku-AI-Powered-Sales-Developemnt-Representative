@@ -155,7 +155,7 @@ class AppConfig(BaseSettings):
     )
     langfuse_host: str = Field(
         default="https://cloud.langfuse.com",
-        validation_alias="LANGFUSE_HOST",
+        validation_alias=AliasChoices("LANGFUSE_HOST", "LANGFUSE_BASE_URL"),
         description="Langfuse Host URL",
     )
     agentmail_api_key: str | None = Field(

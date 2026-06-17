@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from schema.outreach import OutreachEmailDraft
 from utils.model_fallback import run_agent_with_fallback
 from config.settings import settings
-from langfuse.decorators import observe
+from langfuse import observe
 
 logger = logging.getLogger(__name__)
 
