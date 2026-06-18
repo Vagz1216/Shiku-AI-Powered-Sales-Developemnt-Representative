@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from "@clerk/clerk-react";
 import { AppShell } from '@/components/app-shell'
 import { useTenantScope } from '@/components/tenant-scope'
+import { fetchWithAuthRetry } from '@/lib/auth-fetch'
 import { formatTimestamp } from '@/lib/time'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -186,11 +187,9 @@ export default function LeadsPage() {
   const canManageLeads = !!selectedOrganization?.capabilities?.can_manage_leads
 
   const authedFetch = useCallback(async (url: string, init: RequestInit = {}) => {
-    const token = await getToken()
     const headers = new Headers(init.headers)
-    headers.set('Authorization', `Bearer ${token}`)
     if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
-    return fetch(url, { ...init, headers })
+    return fetchWithAuthRetry(getToken, url, { ...init, headers })
   }, [getToken])
 
   const loadLeads = useCallback(async () => {

@@ -317,8 +317,8 @@ def health_db() -> Dict[str, str]:
     """Database health check."""
     try:
         from utils.db_connection import get_conn
-        conn = get_conn()
-        conn.execute("SELECT 1").fetchone()
+        with get_conn() as conn:
+            conn.execute("SELECT 1").fetchone()
         return {"status": "ok", "database": "connected"}
     except Exception as e:
         logger.error(f"Database health check failed: {e}")

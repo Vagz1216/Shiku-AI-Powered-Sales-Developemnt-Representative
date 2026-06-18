@@ -1,10 +1,11 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useCallback, useState, useEffect } from 'react'
 import { SignInButton, useAuth } from "@clerk/clerk-react";
 import Link from 'next/link'
 import { AppShell } from '@/components/app-shell'
 import { useTenantScope } from '@/components/tenant-scope'
+import { fetchWithAuthRetry } from '@/lib/auth-fetch'
 import { DEFAULT_TIME_ZONE, TIME_ZONE_OPTIONS, formatTime, formatTimestamp, normalizeTimeZone, toDatetimeLocal, zonedLocalToIso } from '@/lib/time'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -113,6 +114,10 @@ export default function Home() {
   const hasActiveSubscription = !!selectedOrganization?.subscription?.is_active
   const canRunOutreach = !!selectedOrganization?.capabilities?.can_run_outreach && hasActiveSubscription
 
+  const authedFetch = useCallback((url: string, init: RequestInit = {}) => {
+    return fetchWithAuthRetry(getToken, url, init)
+  }, [getToken])
+
   useEffect(() => {
     if (selectedOrganization?.timezone) {
       const timer = window.setTimeout(() => {
@@ -136,7 +141,7 @@ export default function Home() {
 
     const connectMonitor = async () => {
       try {
-        const token = await getToken()
+        const token = await getToken({ skipCache: true })
         if (!token || cancelled) return
 
         const url = new URL(`${API_BASE}/api/webhooks/stream`)
@@ -173,13 +178,8 @@ export default function Home() {
     if (isLoaded && userId) {
       const loadCampaigns = async () => {
         try {
-          const token = await getToken()
           if (!effectiveOrganizationId) return
-          const res = await fetch(orgUrl(`${API_BASE}/api/campaigns`), {
-            headers: {
-              'Authorization': `Bearer ${token}`
-            }
-          })
+          const res = await authedFetch(orgUrl(`${API_BASE}/api/campaigns`))
           const data = await res.json()
           setCampaigns(data.campaigns || [])
         } catch (err) {
@@ -188,13 +188,8 @@ export default function Home() {
       }
       const loadDraftCount = async () => {
         try {
-          const token = await getToken()
           if (!effectiveOrganizationId) return
-          const res = await fetch(orgUrl(`${API_BASE}/api/drafts`), {
-            headers: {
-              'Authorization': `Bearer ${token}`
-            }
-          })
+          const res = await authedFetch(orgUrl(`${API_BASE}/api/drafts`))
           if (!res.ok) return
           const data = await res.json()
           setPendingDraftCount((data.drafts || []).length)
@@ -204,11 +199,8 @@ export default function Home() {
       }
       const loadAnalytics = async () => {
         try {
-          const token = await getToken()
           if (!effectiveOrganizationId) return
-          const res = await fetch(orgUrl(`${API_BASE}/api/analytics/summary`), {
-            headers: { 'Authorization': `Bearer ${token}` }
-          })
+          const res = await authedFetch(orgUrl(`${API_BASE}/api/analytics/summary`))
           if (!res.ok) return
           setAnalytics(await res.json())
         } catch (err) {
@@ -219,16 +211,11 @@ export default function Home() {
       loadDraftCount()
       loadAnalytics()
     }
-  }, [isLoaded, userId, getToken, effectiveOrganizationId, orgUrl])
+  }, [isLoaded, userId, getToken, effectiveOrganizationId, orgUrl, authedFetch])
 
   const refreshPendingDraftCount = async () => {
     try {
-      const token = await getToken()
-      const res = await fetch(orgUrl(`${API_BASE}/api/drafts`), {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      })
+      const res = await authedFetch(orgUrl(`${API_BASE}/api/drafts`))
       if (!res.ok) return
       const data = await res.json()
       setPendingDraftCount((data.drafts || []).length)
@@ -246,11 +233,9 @@ export default function Home() {
     setOrganizationTimezone(nextTimezone)
     if (!effectiveOrganizationId || !canEditOrganizationTimezone) return
     try {
-      const token = await getToken()
-      const res = await fetch(`${API_BASE}/api/organizations/${effectiveOrganizationId}`, {
+      const res = await authedFetch(`${API_BASE}/api/organizations/${effectiveOrganizationId}`, {
         method: 'PUT',
         headers: {
-          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ timezone: nextTimezone }),
@@ -265,10 +250,7 @@ export default function Home() {
   const loadScheduledEmails = async () => {
     try {
       setScheduledLoading(true)
-      const token = await getToken()
-      const res = await fetch(orgUrl(`${API_BASE}/api/scheduled-emails?limit=100`), {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
+      const res = await authedFetch(orgUrl(`${API_BASE}/api/scheduled-emails?limit=100`))
       if (!res.ok) throw new Error('Failed to load scheduled emails')
       const data = await res.json() as { scheduled?: ScheduledEmail[] }
       setScheduledEmails(data.scheduled || [])
@@ -294,11 +276,9 @@ export default function Home() {
   const saveScheduledEdit = async () => {
     if (!editingScheduled || !scheduledTime.trim() || !canRunOutreach) return
     try {
-      const token = await getToken()
-      const res = await fetch(orgUrl(`${API_BASE}/api/scheduled-emails/${editingScheduled.id}`), {
+      const res = await authedFetch(orgUrl(`${API_BASE}/api/scheduled-emails/${editingScheduled.id}`), {
         method: 'PUT',
         headers: {
-          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
@@ -319,10 +299,8 @@ export default function Home() {
     if (!canRunOutreach) return
     if (!confirm(`Return scheduled email #${email.id} to Draft Approvals?`)) return
     try {
-      const token = await getToken()
-      const res = await fetch(orgUrl(`${API_BASE}/api/scheduled-emails/${email.id}/return-to-review`), {
+      const res = await authedFetch(orgUrl(`${API_BASE}/api/scheduled-emails/${email.id}/return-to-review`), {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` },
       })
       if (!res.ok) throw new Error('Failed to return scheduled email to review')
       await loadScheduledEmails()
@@ -335,15 +313,12 @@ export default function Home() {
   const loadUpcomingFollowups = async () => {
     try {
       setFollowupsLoading(true)
-      const token = await getToken()
       const campaignId = selectedCampaignId()
       const url = new URL(`${API_BASE}/api/followups/upcoming`)
       if (effectiveOrganizationId) url.searchParams.set('organization_id', String(effectiveOrganizationId))
       url.searchParams.set('limit', '100')
       if (campaignId) url.searchParams.set('campaign_id', String(campaignId))
-      const res = await fetch(url.toString(), {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
+      const res = await authedFetch(url.toString())
       if (!res.ok) throw new Error('Failed to load upcoming follow-ups')
       const data = await res.json() as { followups?: UpcomingFollowup[] }
       setUpcomingFollowups(data.followups || [])
@@ -366,7 +341,7 @@ export default function Home() {
     setActiveTab('outreach')
     
     try {
-      const token = await getToken()
+      const token = await getToken({ skipCache: true })
       const url = new URL(`${API_BASE}/api/outreach/stream`)
       if (effectiveOrganizationId) url.searchParams.set('organization_id', String(effectiveOrganizationId))
       if (selectedCampaign) {
@@ -404,11 +379,9 @@ export default function Home() {
   const runScheduledSends = async () => {
     if (!canRunOutreach) return
     try {
-      const token = await getToken()
-      const res = await fetch(orgUrl(`${API_BASE}/api/scheduled-emails/send-due`), {
+      const res = await authedFetch(orgUrl(`${API_BASE}/api/scheduled-emails/send-due`), {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ limit: 50 }),
@@ -428,12 +401,10 @@ export default function Home() {
   const generateFollowups = async () => {
     if (!canRunOutreach) return
     try {
-      const token = await getToken()
       const campaignId = selectedCampaignId()
-      const res = await fetch(orgUrl(`${API_BASE}/api/followups/generate-due`), {
+      const res = await authedFetch(orgUrl(`${API_BASE}/api/followups/generate-due`), {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ campaign_id: campaignId, limit: 50 }),

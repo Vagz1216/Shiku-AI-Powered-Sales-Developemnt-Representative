@@ -4,6 +4,7 @@ import { useAuth } from '@clerk/clerk-react'
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import { AppShell } from '@/components/app-shell'
 import { TenantOrganization, notifyOrganizationChanged, useTenantScope } from '@/components/tenant-scope'
+import { fetchWithAuthRetry } from '@/lib/auth-fetch'
 import { DEFAULT_TIME_ZONE, TIME_ZONE_OPTIONS, normalizeTimeZone } from '@/lib/time'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -62,10 +63,7 @@ export default function OrganizationPage() {
   const canCreateOrganizations = organizations.some(org => org.current_user_role === 'system_owner')
 
   const authedFetch = useCallback(async (url: string, init: RequestInit = {}) => {
-    const token = await getToken()
-    const headers = new Headers(init.headers)
-    headers.set('Authorization', `Bearer ${token}`)
-    return fetch(url, { ...init, headers })
+    return fetchWithAuthRetry(getToken, url, init)
   }, [getToken])
 
   const loadMembers = useCallback(async () => {

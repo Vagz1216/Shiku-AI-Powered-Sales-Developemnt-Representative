@@ -54,14 +54,14 @@ def save_email(lead_id: int, campaign_id: int, subject: str, body: str) -> Dict[
 
 
 def fetch_inbound_messages() -> Dict[str, Any]:
-    conn = get_conn()
     try:
-        ob = sql_order_by_datetime("created_at")
-        pf = sql_bool_false()
-        cur = conn.execute(
-            f"SELECT * FROM email_messages WHERE direction = 'inbound' AND processed = {pf} ORDER BY {ob} ASC"
-        )
-        rows = cur.fetchall()
+        with get_conn() as conn:
+            ob = sql_order_by_datetime("created_at")
+            pf = sql_bool_false()
+            cur = conn.execute(
+                f"SELECT * FROM email_messages WHERE direction = 'inbound' AND processed = {pf} ORDER BY {ob} ASC"
+            )
+            rows = cur.fetchall()
         messages = [dict_from_row(r) for r in rows]
         return {"success": True, "data": messages, "error": None}
     except Exception as e:

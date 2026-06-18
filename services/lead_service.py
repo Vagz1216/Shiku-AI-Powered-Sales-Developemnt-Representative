@@ -304,7 +304,6 @@ class DBLeadProvider(LeadProvider):
     """Implementation of LeadProvider using SQLite/Aurora DB."""
     
     def get_leads(self, campaign_id: Optional[int] = None, max_leads: Optional[int] = None, order_by: str = 'newest_first', organization_id: Optional[int] = None) -> Dict[str, Any]:
-        conn = get_conn()
         if using_postgres():
             select_sql = """
             SELECT l.id, l.name, l.email, l.company, l.industry, l.pain_points, l.status,
@@ -359,9 +358,10 @@ class DBLeadProvider(LeadProvider):
         if max_leads is not None:
             query += " LIMIT ?"
             params.append(max_leads)
-            
-        cur = conn.execute(query, tuple(params))
-        rows = cur.fetchall()
+
+        with get_conn() as conn:
+            cur = conn.execute(query, tuple(params))
+            rows = cur.fetchall()
         leads = [dict_from_row(r) for r in rows]
         filtered = []
         for l in leads:
@@ -414,13 +414,13 @@ class DBLeadProvider(LeadProvider):
     def get_thread(self, lead_id: int) -> Dict[str, Any]:
         if not lead_id:
             return {"success": False, "data": None, "error": "lead_id required"}
-        conn = get_conn()
         ob = sql_order_by_datetime("created_at")
-        cur = conn.execute(
-            f"SELECT * FROM email_messages WHERE lead_id = ? ORDER BY {ob} ASC",
-            (lead_id,),
-        )
-        rows = cur.fetchall()
+        with get_conn() as conn:
+            cur = conn.execute(
+                f"SELECT * FROM email_messages WHERE lead_id = ? ORDER BY {ob} ASC",
+                (lead_id,),
+            )
+            rows = cur.fetchall()
         messages = [dict_from_row(r) for r in rows]
         return {"success": True, "data": messages, "error": None}
 
@@ -460,14 +460,14 @@ class DBLeadProvider(LeadProvider):
             return {"success": False, "data": None, "error": str(e)}
 
     def get_lead(self, lead_id: Optional[int] = None) -> Optional[dict]:
-        conn = get_conn()
-        if lead_id:
-            cur = conn.execute("SELECT id, name, email, company, industry, pain_points FROM leads WHERE id = ?", (lead_id,))
-        else:
-            cur = conn.execute(
-                f"SELECT id, name, email, company, industry, pain_points FROM leads ORDER BY {sql_random_order()} LIMIT 1"
-            )
-        row = cur.fetchone()
+        with get_conn() as conn:
+            if lead_id:
+                cur = conn.execute("SELECT id, name, email, company, industry, pain_points FROM leads WHERE id = ?", (lead_id,))
+            else:
+                cur = conn.execute(
+                    f"SELECT id, name, email, company, industry, pain_points FROM leads ORDER BY {sql_random_order()} LIMIT 1"
+                )
+            row = cur.fetchone()
         return dict_from_row(row)
 
 

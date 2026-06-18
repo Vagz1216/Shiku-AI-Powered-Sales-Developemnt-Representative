@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useAuth } from '@clerk/clerk-react'
 import { AppShell } from '@/components/app-shell'
 import { useTenantScope } from '@/components/tenant-scope'
+import { fetchWithAuthRetry } from '@/lib/auth-fetch'
 import { formatTimestamp } from '@/lib/time'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -135,27 +136,24 @@ export default function UsagePage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
+  const authedFetch = useCallback((url: string, init: RequestInit = {}) => {
+    return fetchWithAuthRetry(getToken, url, init)
+  }, [getToken])
+
   const loadUsage = useCallback(async () => {
     try {
       setLoading(true)
       setError('')
       if (!selectedOrganizationId) return
-      const token = await getToken()
-      const res = await fetch(orgUrl(`${API_BASE}/api/usage/llm?limit=200`), {
-        headers: { Authorization: `Bearer ${token}` },
-      })
+      const res = await authedFetch(orgUrl(`${API_BASE}/api/usage/llm?limit=200`))
       if (!res.ok) throw new Error('Failed to load usage')
       setUsage(await res.json() as UsagePayload)
-      const customerRes = await fetch(orgUrl(`${API_BASE}/api/usage/customer`), {
-        headers: { Authorization: `Bearer ${token}` },
-      })
+      const customerRes = await authedFetch(orgUrl(`${API_BASE}/api/usage/customer`))
       if (customerRes.ok) {
         setCustomerUsage(await customerRes.json() as CustomerUsagePayload)
       }
       if (selectedOrganization?.capabilities?.can_manage_subscription_plans) {
-        const unitRes = await fetch(orgUrl(`${API_BASE}/api/usage/unit-economics`), {
-          headers: { Authorization: `Bearer ${token}` },
-        })
+        const unitRes = await authedFetch(orgUrl(`${API_BASE}/api/usage/unit-economics`))
         if (unitRes.ok) {
           setUnitEconomics(await unitRes.json() as UnitEconomicsPayload)
         }
@@ -167,7 +165,7 @@ export default function UsagePage() {
     } finally {
       setLoading(false)
     }
-  }, [getToken, orgUrl, selectedOrganization, selectedOrganizationId])
+  }, [authedFetch, orgUrl, selectedOrganization, selectedOrganizationId])
 
   useEffect(() => {
     if (isLoaded && userId && selectedOrganizationId) {

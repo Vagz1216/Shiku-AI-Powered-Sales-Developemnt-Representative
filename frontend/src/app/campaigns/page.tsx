@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useAuth } from "@clerk/clerk-react";
 import { AppShell } from '@/components/app-shell'
 import { useTenantScope } from '@/components/tenant-scope'
+import { fetchWithAuthRetry } from '@/lib/auth-fetch'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -88,14 +89,15 @@ export default function CampaignsPage() {
   })
   const canManageCampaigns = !!selectedOrganization?.capabilities?.can_manage_campaigns
 
+  const authedFetch = useCallback((url: string, init: RequestInit = {}) => {
+    return fetchWithAuthRetry(getToken, url, init)
+  }, [getToken])
+
   const loadCampaigns = useCallback(async () => {
     try {
       if (!selectedOrganizationId) return
-      const token = await getToken()
       setLoading(true)
-      const res = await fetch(orgUrl(`${API_BASE}/api/campaigns?active_only=false`), {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
+      const res = await authedFetch(orgUrl(`${API_BASE}/api/campaigns?active_only=false`))
       if (!res.ok) throw new Error('Failed to fetch campaigns')
       const data = await res.json() as { campaigns?: Campaign[] }
       const baseCampaigns: Campaign[] = data.campaigns || []
@@ -103,9 +105,7 @@ export default function CampaignsPage() {
       const campaignsWithStaff = await Promise.all(
         baseCampaigns.map(async (campaign) => {
           try {
-            const staffRes = await fetch(orgUrl(`${API_BASE}/api/campaigns/${campaign.id}/staff`), {
-              headers: { 'Authorization': `Bearer ${token}` }
-            })
+            const staffRes = await authedFetch(orgUrl(`${API_BASE}/api/campaigns/${campaign.id}/staff`))
             if (!staffRes.ok) {
               return { ...campaign, staff_names: [] }
             }
@@ -141,10 +141,8 @@ export default function CampaignsPage() {
     if (!canManageCampaigns) return
     if (!confirm('Are you sure you want to delete this campaign?')) return
     try {
-      const token = await getToken()
-      const res = await fetch(orgUrl(`${API_BASE}/api/campaigns/${id}`), {
+      const res = await authedFetch(orgUrl(`${API_BASE}/api/campaigns/${id}`), {
         method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${token}` }
       })
       if (!res.ok) throw new Error('Failed to delete')
       setCampaigns(campaigns.filter(c => c.id !== id))
@@ -193,7 +191,6 @@ export default function CampaignsPage() {
     e.preventDefault()
     if (!canManageCampaigns) return
     try {
-      const token = await getToken()
       const payload = {
         ...formData,
         max_leads_per_campaign: formData.max_leads_per_campaign ? parseInt(formData.max_leads_per_campaign) : null,
@@ -205,10 +202,9 @@ export default function CampaignsPage() {
         ? orgUrl(`${API_BASE}/api/campaigns/${editingCampaign.id}`)
         : orgUrl(`${API_BASE}/api/campaigns`)
         
-      const res = await fetch(url, {
+      const res = await authedFetch(url, {
         method: editingCampaign ? 'PUT' : 'POST',
         headers: {
-          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify(payload)
@@ -239,10 +235,7 @@ export default function CampaignsPage() {
     try {
       setLeadCampaign(campaign)
       setIsLeadsModalOpen(true)
-      const token = await getToken()
-      const res = await fetch(orgUrl(`${API_BASE}/api/campaigns/${campaign.id}/leads`), {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
+      const res = await authedFetch(orgUrl(`${API_BASE}/api/campaigns/${campaign.id}/leads`))
       if (!res.ok) throw new Error('Failed to load campaign leads')
       const data = await res.json() as { leads?: CampaignLead[] }
       const leads: CampaignLead[] = data.leads || []
@@ -262,11 +255,9 @@ export default function CampaignsPage() {
     if (!leadCampaign || !canManageCampaigns) return
     try {
       setLeadsSaving(true)
-      const token = await getToken()
-      const res = await fetch(orgUrl(`${API_BASE}/api/campaigns/${leadCampaign.id}/leads`), {
+      const res = await authedFetch(orgUrl(`${API_BASE}/api/campaigns/${leadCampaign.id}/leads`), {
         method: 'PUT',
         headers: {
-          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({ lead_ids: selectedLeadIds })
@@ -284,10 +275,7 @@ export default function CampaignsPage() {
     try {
       setSequenceCampaign(campaign)
       setIsSequenceModalOpen(true)
-      const token = await getToken()
-      const res = await fetch(orgUrl(`${API_BASE}/api/campaigns/${campaign.id}/sequence`), {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
+      const res = await authedFetch(orgUrl(`${API_BASE}/api/campaigns/${campaign.id}/sequence`))
       if (!res.ok) throw new Error('Failed to load follow-up sequence')
       const data = await res.json() as { steps?: SequenceStep[] }
       setSequenceSteps((data.steps || []).map(step => ({ ...step, active: !!step.active })))
@@ -316,11 +304,9 @@ export default function CampaignsPage() {
     if (!sequenceCampaign || !canManageCampaigns) return
     try {
       setSequenceSaving(true)
-      const token = await getToken()
-      const res = await fetch(orgUrl(`${API_BASE}/api/campaigns/${sequenceCampaign.id}/sequence`), {
+      const res = await authedFetch(orgUrl(`${API_BASE}/api/campaigns/${sequenceCampaign.id}/sequence`), {
         method: 'PUT',
         headers: {
-          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({ steps: sequenceSteps.map(step => ({ ...step, active: !!step.active })) })
@@ -336,10 +322,7 @@ export default function CampaignsPage() {
 
   const exportCampaignResults = async (campaign: Campaign) => {
     try {
-      const token = await getToken()
-      const res = await fetch(orgUrl(`${API_BASE}/api/campaigns/${campaign.id}/results/export.csv`), {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
+      const res = await authedFetch(orgUrl(`${API_BASE}/api/campaigns/${campaign.id}/results/export.csv`))
       if (!res.ok) throw new Error('Export failed')
       const blob = await res.blob()
       const url = window.URL.createObjectURL(blob)

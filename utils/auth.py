@@ -2,6 +2,7 @@ import os
 import time
 import httpx
 import logging
+import threading
 from typing import Optional, Dict, Any
 from fastapi import Request, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -23,6 +24,8 @@ class ClerkAuth:
     def __init__(self):
         self.jwks: Optional[Dict[str, Any]] = None
         self._jwks_fetched_at: float = 0.0
+        self._user_cache: dict[str, tuple[float, Dict[str, Any]]] = {}
+        self._user_cache_lock = threading.Lock()
 
     async def get_jwks(self):
         now = time.time()
@@ -80,11 +83,33 @@ class ClerkAuth:
         if payload.get("email") or not CLERK_SECRET_KEY or not payload.get("sub"):
             return payload
 
+        from config.settings import settings
+
+        user_id = str(payload["sub"])
+        cache_ttl = settings.clerk_user_cache_ttl_seconds
+        now = time.time()
+        if cache_ttl > 0:
+            with self._user_cache_lock:
+                cached = self._user_cache.get(user_id)
+                if cached and cached[0] > now:
+                    payload.update(cached[1])
+                    return payload
+                if cached:
+                    self._user_cache.pop(user_id, None)
+
         try:
+            started = time.perf_counter()
             async with httpx.AsyncClient(timeout=10) as client:
                 response = await client.get(
-                    f"https://api.clerk.com/v1/users/{payload['sub']}",
+                    f"https://api.clerk.com/v1/users/{user_id}",
                     headers={"Authorization": f"Bearer {CLERK_SECRET_KEY}"},
+                )
+            duration_ms = round((time.perf_counter() - started) * 1000, 2)
+            if duration_ms > 1000:
+                logger.warning(
+                    "Slow Clerk user enrichment: %.2fms",
+                    duration_ms,
+                    extra={"kind": "external_dependency_slow", "component": "auth"},
                 )
             if response.status_code >= 400:
                 logger.warning("Could not enrich Clerk user payload: %s", response.status_code)
@@ -103,6 +128,11 @@ class ClerkAuth:
             ).strip()
             if name:
                 payload["name"] = name
+            if cache_ttl > 0:
+                profile = {k: payload[k] for k in ("email", "name") if payload.get(k)}
+                if profile:
+                    with self._user_cache_lock:
+                        self._user_cache[user_id] = (time.time() + cache_ttl, profile)
         except Exception as e:
             logger.warning("Failed to enrich Clerk user payload: %s", e)
         return payload

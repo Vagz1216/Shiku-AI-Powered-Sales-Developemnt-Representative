@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useAuth } from '@clerk/clerk-react'
 import { AppShell } from '@/components/app-shell'
 import { useTenantScope } from '@/components/tenant-scope'
+import { fetchWithAuthRetry } from '@/lib/auth-fetch'
 import { formatTimestamp } from '@/lib/time'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -51,9 +52,8 @@ export default function AuditPage() {
   const [error, setError] = useState('')
   const [eventsForbidden, setEventsForbidden] = useState(false)
 
-  const authedFetch = useCallback(async (url: string) => {
-    const token = await getToken()
-    return fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+  const authedFetch = useCallback(async (url: string, init: RequestInit = {}) => {
+    return fetchWithAuthRetry(getToken, url, init)
   }, [getToken])
 
   const loadStreams = useCallback(async () => {

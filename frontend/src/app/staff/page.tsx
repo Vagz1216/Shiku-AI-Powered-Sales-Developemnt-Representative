@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from "@clerk/clerk-react";
 import { AppShell } from '@/components/app-shell'
 import { useTenantScope } from '@/components/tenant-scope'
+import { fetchWithAuthRetry } from '@/lib/auth-fetch'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -55,27 +56,27 @@ export default function StaffPage() {
   const [editing, setEditing] = useState(false)
   const canManageStaff = !!selectedOrganization?.capabilities?.can_manage_staff
 
+  const authedFetch = useCallback((url: string, init: RequestInit = {}) => {
+    return fetchWithAuthRetry(getToken, url, init)
+  }, [getToken])
+
   const loadCampaignStaff = useCallback(async (campaignId: number) => {
-    const token = await getToken()
-    const res = await fetch(orgUrl(`${API_BASE}/api/campaigns/${campaignId}/staff`), {
-      headers: { 'Authorization': `Bearer ${token}` }
-    })
+    const res = await authedFetch(orgUrl(`${API_BASE}/api/campaigns/${campaignId}/staff`))
     if (!res.ok) throw new Error('Failed to load campaign staff')
     const data = await res.json() as { staff?: CampaignStaffRow[] }
     const rows = data.staff || []
     setCampaignStaff(rows)
     setSelectedStaffIds(rows.filter((s) => !!s.assigned).map((s) => s.id))
-  }, [getToken, orgUrl])
+  }, [authedFetch, orgUrl])
 
   const loadInitial = useCallback(async () => {
     try {
       if (!selectedOrganizationId) return
-      const token = await getToken()
       setLoading(true)
       setError('')
       const [staffRes, campaignsRes] = await Promise.all([
-        fetch(orgUrl(`${API_BASE}/api/staff`), { headers: { 'Authorization': `Bearer ${token}` } }),
-        fetch(orgUrl(`${API_BASE}/api/campaigns?active_only=false`), { headers: { 'Authorization': `Bearer ${token}` } }),
+        authedFetch(orgUrl(`${API_BASE}/api/staff`)),
+        authedFetch(orgUrl(`${API_BASE}/api/campaigns?active_only=false`)),
       ])
       if (!staffRes.ok) throw new Error('Failed to load staff')
       if (!campaignsRes.ok) throw new Error('Failed to load campaigns')
@@ -94,7 +95,7 @@ export default function StaffPage() {
     } finally {
       setLoading(false)
     }
-  }, [getToken, loadCampaignStaff, orgUrl, selectedOrganizationId])
+  }, [authedFetch, loadCampaignStaff, orgUrl, selectedOrganizationId])
 
   useEffect(() => {
     if (isLoaded && userId && selectedOrganizationId) {
@@ -106,8 +107,7 @@ export default function StaffPage() {
   }, [isLoaded, userId, selectedOrganizationId, loadInitial])
 
   const loadStaffOnly = async () => {
-    const token = await getToken()
-    const res = await fetch(orgUrl(`${API_BASE}/api/staff`), { headers: { 'Authorization': `Bearer ${token}` } })
+    const res = await authedFetch(orgUrl(`${API_BASE}/api/staff`))
     if (!res.ok) throw new Error('Failed to load staff')
     const data = await res.json() as { staff?: Staff[] }
     setStaff(data.staff || [])
@@ -122,7 +122,6 @@ export default function StaffPage() {
     e.preventDefault()
     try {
       setSaving(true)
-      const token = await getToken()
       const payload = {
         name: formData.name,
         email: formData.email,
@@ -132,10 +131,9 @@ export default function StaffPage() {
       }
       const url = editing ? orgUrl(`${API_BASE}/api/staff/${formData.id}`) : orgUrl(`${API_BASE}/api/staff`)
       const method = editing ? 'PUT' : 'POST'
-      const res = await fetch(url, {
+      const res = await authedFetch(url, {
         method,
         headers: {
-          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify(payload)
@@ -166,10 +164,8 @@ export default function StaffPage() {
     if (!confirm('Delete this staff member?')) return
     try {
       setSaving(true)
-      const token = await getToken()
-      const res = await fetch(orgUrl(`${API_BASE}/api/staff/${staffId}`), {
+      const res = await authedFetch(orgUrl(`${API_BASE}/api/staff/${staffId}`), {
         method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${token}` }
       })
       if (!res.ok) throw new Error('Failed to delete staff')
       await loadStaffOnly()
@@ -191,11 +187,9 @@ export default function StaffPage() {
     if (!selectedCampaignId) return
     try {
       setSaving(true)
-      const token = await getToken()
-      const res = await fetch(orgUrl(`${API_BASE}/api/campaigns/${selectedCampaignId}/staff`), {
+      const res = await authedFetch(orgUrl(`${API_BASE}/api/campaigns/${selectedCampaignId}/staff`), {
         method: 'PUT',
         headers: {
-          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({ staff_ids: selectedStaffIds })

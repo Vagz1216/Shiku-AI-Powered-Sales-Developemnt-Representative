@@ -5,6 +5,7 @@ import { useAuth } from '@clerk/clerk-react'
 import { ActionFeedback, type ActionFeedbackState } from '@/components/action-feedback'
 import { AppShell } from '@/components/app-shell'
 import { useTenantScope } from '@/components/tenant-scope'
+import { fetchWithAuthRetry } from '@/lib/auth-fetch'
 import { formatTimestamp } from '@/lib/time'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -126,10 +127,7 @@ export default function MailboxesPage() {
   const canSyncMailboxes = canManageMailboxes || selectedOrganization?.current_user_role === 'sales_manager'
 
   const authedFetch = useCallback(async (url: string, init: RequestInit = {}) => {
-    const token = await getToken()
-    const headers = new Headers(init.headers)
-    headers.set('Authorization', `Bearer ${token}`)
-    return fetch(url, { ...init, headers })
+    return fetchWithAuthRetry(getToken, url, init)
   }, [getToken])
 
   const loadMailboxes = useCallback(async (organizationId: number) => {

@@ -5,6 +5,7 @@ import re
 import sqlite3
 import threading
 import logging
+import time
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -17,6 +18,9 @@ SEED_FILE = os.path.join(DB_DIR, 'seed.sql')
 
 _bootstrap_done: set[str] = set()
 _bootstrap_lock = threading.Lock()
+_postgres_pool = None
+_postgres_pool_dsn: str | None = None
+_postgres_pool_lock = threading.Lock()
 
 
 _POSTGRES_ID_TABLES = {
@@ -66,6 +70,29 @@ def using_aurora() -> bool:
 def using_postgres() -> bool:
     """True when the active database speaks PostgreSQL SQL semantics."""
     return _is_aurora() or _is_postgres_url()
+
+
+def _get_postgres_pool(database_url: str):
+    global _postgres_pool, _postgres_pool_dsn
+    from config.settings import settings
+    from psycopg.rows import dict_row
+    from psycopg_pool import ConnectionPool
+
+    with _postgres_pool_lock:
+        if _postgres_pool is None or _postgres_pool_dsn != database_url:
+            if _postgres_pool is not None:
+                _postgres_pool.close()
+            max_size = settings.postgres_pool_max_size
+            min_size = min(settings.postgres_pool_min_size, max_size)
+            _postgres_pool = ConnectionPool(
+                conninfo=database_url,
+                min_size=min_size,
+                max_size=max_size,
+                kwargs={"row_factory": dict_row},
+                open=True,
+            )
+            _postgres_pool_dsn = database_url
+        return _postgres_pool
 
 
 class AuroraConnection:
@@ -196,10 +223,13 @@ class PostgresConnection:
     """Small psycopg wrapper that mirrors the sqlite3 connection surface used by services."""
 
     def __init__(self, database_url: str):
-        import psycopg
-        from psycopg.rows import dict_row
-
-        self._conn = psycopg.connect(database_url, row_factory=dict_row)
+        self._pool = _get_postgres_pool(database_url)
+        started = time.perf_counter()
+        self._conn = self._pool.getconn()
+        duration_ms = round((time.perf_counter() - started) * 1000, 2)
+        if duration_ms > 1000:
+            logger.warning("Slow PostgreSQL pool checkout: %.2fms", duration_ms)
+        self._closed = False
 
     def execute(self, sql: str, params: tuple = ()) -> "PostgresCursor":
         pg_sql, auto_returning_id = _sqlite_to_psycopg_sql(sql)
@@ -218,17 +248,29 @@ class PostgresConnection:
         self._conn.commit()
 
     def close(self):
-        self._conn.close()
+        if self._closed:
+            return
+        self._pool.putconn(self._conn)
+        self._closed = True
 
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc, tb):
-        if exc_type:
-            self._conn.rollback()
-        else:
-            self._conn.commit()
+        try:
+            if exc_type:
+                self._conn.rollback()
+            else:
+                self._conn.commit()
+        finally:
+            self.close()
         return False
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
 
 
 class PostgresCursor:

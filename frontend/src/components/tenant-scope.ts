@@ -2,6 +2,7 @@
 
 import { useAuth } from '@clerk/clerk-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { fetchWithAuthRetry } from '@/lib/auth-fetch'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 const STORAGE_KEY = 'sdr:selectedOrganizationId'
@@ -89,10 +90,7 @@ export function useTenantScope() {
     if (!isLoaded || !userId) return
     setLoading(true)
     try {
-      const token = await getToken()
-      const res = await fetch(`${API_BASE}/api/me`, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
+      const res = await fetchWithAuthRetry(getToken, `${API_BASE}/api/me`)
       if (!res.ok) {
         setOrganizations([])
         setSelectedOrganizationId(null)

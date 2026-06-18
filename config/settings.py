@@ -76,6 +76,24 @@ class AppConfig(BaseSettings):
         validation_alias="DB_NAME",
         description="Aurora database name",
     )
+    postgres_pool_min_size: int = Field(
+        default=1,
+        validation_alias="POSTGRES_POOL_MIN_SIZE",
+        description="Minimum PostgreSQL pooled connections for standard Postgres deployments",
+        ge=0,
+    )
+    postgres_pool_max_size: int = Field(
+        default=5,
+        validation_alias="POSTGRES_POOL_MAX_SIZE",
+        description="Maximum PostgreSQL pooled connections for standard Postgres deployments",
+        ge=1,
+    )
+    clerk_user_cache_ttl_seconds: int = Field(
+        default=300,
+        validation_alias="CLERK_USER_CACHE_TTL_SECONDS",
+        description="Seconds to cache Clerk user profile enrichment after JWT verification",
+        ge=0,
+    )
 
     # API Keys (.env: OPENAI_API_KEY, AGENTMAIL_*)
     openai_api_key: str | None = Field(

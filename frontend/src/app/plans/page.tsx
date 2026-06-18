@@ -4,6 +4,7 @@ import { useAuth } from '@clerk/clerk-react'
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import { AppShell } from '@/components/app-shell'
 import { SubscriptionPlan, useTenantScope } from '@/components/tenant-scope'
+import { fetchWithAuthRetry } from '@/lib/auth-fetch'
 import { formatDate } from '@/lib/time'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -91,10 +92,7 @@ export default function PlansPage() {
   const currentPlanId = selectedOrganization?.subscription?.plan?.id || null
 
   const authedFetch = useCallback(async (url: string, init: RequestInit = {}) => {
-    const token = await getToken()
-    const headers = new Headers(init.headers)
-    headers.set('Authorization', `Bearer ${token}`)
-    return fetch(url, { ...init, headers })
+    return fetchWithAuthRetry(getToken, url, init)
   }, [getToken])
 
   const loadPlans = useCallback(async () => {

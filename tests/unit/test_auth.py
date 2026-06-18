@@ -1,0 +1,67 @@
+import asyncio
+
+from utils import auth
+
+
+class _FakeResponse:
+    status_code = 200
+
+    def json(self):
+        return {
+            "primary_email_address_id": "email_1",
+            "email_addresses": [{"id": "email_1", "email_address": "person@example.com"}],
+            "first_name": "Test",
+            "last_name": "User",
+        }
+
+
+class _FakeAsyncClient:
+    calls = 0
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def get(self, *args, **kwargs):
+        type(self).calls += 1
+        return _FakeResponse()
+
+
+def test_clerk_user_enrichment_cache_reuses_profile(monkeypatch):
+    from config.settings import settings
+
+    monkeypatch.setattr(auth, "CLERK_SECRET_KEY", "sk_test")
+    monkeypatch.setattr(auth.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(settings, "clerk_user_cache_ttl_seconds", 300)
+    _FakeAsyncClient.calls = 0
+
+    clerk_auth = auth.ClerkAuth()
+
+    first = asyncio.run(clerk_auth.enrich_payload({"sub": "user_1"}))
+    second = asyncio.run(clerk_auth.enrich_payload({"sub": "user_1"}))
+
+    assert first["email"] == "person@example.com"
+    assert first["name"] == "Test User"
+    assert second["email"] == "person@example.com"
+    assert _FakeAsyncClient.calls == 1
+
+
+def test_clerk_user_enrichment_cache_can_be_disabled(monkeypatch):
+    from config.settings import settings
+
+    monkeypatch.setattr(auth, "CLERK_SECRET_KEY", "sk_test")
+    monkeypatch.setattr(auth.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(settings, "clerk_user_cache_ttl_seconds", 0)
+    _FakeAsyncClient.calls = 0
+
+    clerk_auth = auth.ClerkAuth()
+
+    asyncio.run(clerk_auth.enrich_payload({"sub": "user_1"}))
+    asyncio.run(clerk_auth.enrich_payload({"sub": "user_1"}))
+
+    assert _FakeAsyncClient.calls == 2
