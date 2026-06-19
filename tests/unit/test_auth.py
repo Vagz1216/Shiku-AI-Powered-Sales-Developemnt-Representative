@@ -32,6 +32,12 @@ class _FakeAsyncClient:
         return _FakeResponse()
 
 
+class _SlowFakeAsyncClient(_FakeAsyncClient):
+    async def get(self, *args, **kwargs):
+        await asyncio.sleep(0.01)
+        return await super().get(*args, **kwargs)
+
+
 def test_clerk_user_enrichment_cache_reuses_profile(monkeypatch):
     from config.settings import settings
 
@@ -65,3 +71,26 @@ def test_clerk_user_enrichment_cache_can_be_disabled(monkeypatch):
     asyncio.run(clerk_auth.enrich_payload({"sub": "user_1"}))
 
     assert _FakeAsyncClient.calls == 2
+
+
+def test_clerk_user_enrichment_deduplicates_concurrent_fetches(monkeypatch):
+    from config.settings import settings
+
+    monkeypatch.setattr(auth, "CLERK_SECRET_KEY", "sk_test")
+    monkeypatch.setattr(auth.httpx, "AsyncClient", _SlowFakeAsyncClient)
+    monkeypatch.setattr(settings, "clerk_user_cache_ttl_seconds", 300)
+    _SlowFakeAsyncClient.calls = 0
+
+    clerk_auth = auth.ClerkAuth()
+
+    async def enrich_all():
+        return await asyncio.gather(
+            clerk_auth.enrich_payload({"sub": "user_1"}),
+            clerk_auth.enrich_payload({"sub": "user_1"}),
+            clerk_auth.enrich_payload({"sub": "user_1"}),
+        )
+
+    results = asyncio.run(enrich_all())
+
+    assert all(result["email"] == "person@example.com" for result in results)
+    assert _SlowFakeAsyncClient.calls == 1

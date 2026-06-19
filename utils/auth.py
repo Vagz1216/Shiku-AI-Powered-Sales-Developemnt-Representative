@@ -1,6 +1,7 @@
 import os
 import time
 import httpx
+import asyncio
 import logging
 import threading
 from typing import Optional, Dict, Any
@@ -27,6 +28,10 @@ class ClerkAuth:
         self._jwks_fetched_at: float = 0.0
         self._user_cache: dict[str, tuple[float, Dict[str, Any]]] = {}
         self._user_cache_lock = threading.Lock()
+        self._user_inflight: dict[str, asyncio.Task[Dict[str, Any]]] = {}
+        self._user_inflight_lock = threading.Lock()
+        self._enrichment_failures = 0
+        self._enrichment_circuit_open_until = 0.0
 
     async def get_jwks(self):
         now = time.time()
@@ -89,6 +94,13 @@ class ClerkAuth:
         user_id = str(payload["sub"])
         cache_ttl = settings.clerk_user_cache_ttl_seconds
         now = time.time()
+        if self._enrichment_circuit_open_until > now:
+            logger.warning(
+                "Skipping Clerk user enrichment while circuit is open",
+                extra={"kind": "external_dependency_circuit_open", "component": "auth"},
+            )
+            return payload
+
         if cache_ttl > 0:
             with self._user_cache_lock:
                 cached = self._user_cache.get(user_id)
@@ -99,8 +111,37 @@ class ClerkAuth:
                     self._user_cache.pop(user_id, None)
 
         try:
-            started = time.perf_counter()
-            async with httpx.AsyncClient(timeout=10) as client:
+            profile = await self._get_enriched_profile(user_id)
+            payload.update(profile)
+            if cache_ttl > 0:
+                cache_profile = {k: payload[k] for k in ("email", "name") if payload.get(k)}
+                if cache_profile:
+                    with self._user_cache_lock:
+                        self._user_cache[user_id] = (time.time() + cache_ttl, cache_profile)
+        except Exception as e:
+            logger.warning("Failed to enrich Clerk user payload: %s", e)
+        return payload
+
+    async def _get_enriched_profile(self, user_id: str) -> Dict[str, Any]:
+        with self._user_inflight_lock:
+            task = self._user_inflight.get(user_id)
+            if task is None or task.done():
+                task = asyncio.create_task(self._fetch_enriched_profile(user_id))
+                self._user_inflight[user_id] = task
+        try:
+            return await task
+        finally:
+            if task.done():
+                with self._user_inflight_lock:
+                    if self._user_inflight.get(user_id) is task:
+                        self._user_inflight.pop(user_id, None)
+
+    async def _fetch_enriched_profile(self, user_id: str) -> Dict[str, Any]:
+        from config.settings import settings
+
+        started = time.perf_counter()
+        try:
+            async with httpx.AsyncClient(timeout=settings.clerk_user_enrichment_timeout_seconds) as client:
                 response = await client.get(
                     f"https://api.clerk.com/v1/users/{user_id}",
                     headers={"Authorization": f"Bearer {CLERK_SECRET_KEY}"},
@@ -114,29 +155,41 @@ class ClerkAuth:
                 )
             if response.status_code >= 400:
                 logger.warning("Could not enrich Clerk user payload: %s", response.status_code)
-                return payload
+                self._record_enrichment_failure()
+                return {}
 
             user_data = response.json()
+            profile: Dict[str, Any] = {}
             primary_id = user_data.get("primary_email_address_id")
             emails = user_data.get("email_addresses") or []
             primary = next((item for item in emails if item.get("id") == primary_id), None)
             primary = primary or (emails[0] if emails else None)
             email = primary.get("email_address") if primary else None
             if email:
-                payload["email"] = email
+                profile["email"] = email
             name = " ".join(
                 part for part in [user_data.get("first_name"), user_data.get("last_name")] if part
             ).strip()
             if name:
-                payload["name"] = name
-            if cache_ttl > 0:
-                profile = {k: payload[k] for k in ("email", "name") if payload.get(k)}
-                if profile:
-                    with self._user_cache_lock:
-                        self._user_cache[user_id] = (time.time() + cache_ttl, profile)
-        except Exception as e:
-            logger.warning("Failed to enrich Clerk user payload: %s", e)
-        return payload
+                profile["name"] = name
+            self._enrichment_failures = 0
+            return profile
+        except Exception:
+            self._record_enrichment_failure()
+            raise
+
+    def _record_enrichment_failure(self) -> None:
+        from config.settings import settings
+
+        self._enrichment_failures += 1
+        if self._enrichment_failures >= 3 and settings.clerk_user_enrichment_circuit_cooldown_seconds > 0:
+            self._enrichment_circuit_open_until = (
+                time.time() + settings.clerk_user_enrichment_circuit_cooldown_seconds
+            )
+            logger.warning(
+                "Opening Clerk user enrichment circuit after repeated failures",
+                extra={"kind": "external_dependency_circuit_open", "component": "auth"},
+            )
 
 clerk_auth = ClerkAuth()
 

@@ -94,6 +94,27 @@ class AppConfig(BaseSettings):
         description="Seconds to cache Clerk user profile enrichment after JWT verification",
         ge=0,
     )
+    clerk_user_enrichment_timeout_seconds: float = Field(
+        default=5.0,
+        validation_alias="CLERK_USER_ENRICHMENT_TIMEOUT_SECONDS",
+        description="HTTP timeout for optional Clerk user profile enrichment",
+        gt=0,
+        le=30,
+    )
+    clerk_user_enrichment_circuit_cooldown_seconds: int = Field(
+        default=30,
+        validation_alias="CLERK_USER_ENRICHMENT_CIRCUIT_COOLDOWN_SECONDS",
+        description="Seconds to skip optional Clerk user enrichment after repeated failures",
+        ge=0,
+        le=300,
+    )
+    tenant_cache_ttl_seconds: int = Field(
+        default=60,
+        validation_alias="TENANT_CACHE_TTL_SECONDS",
+        description="Seconds to cache authenticated user and organization membership lookups",
+        ge=0,
+        le=600,
+    )
 
     # API Keys (.env: OPENAI_API_KEY, AGENTMAIL_*)
     openai_api_key: str | None = Field(

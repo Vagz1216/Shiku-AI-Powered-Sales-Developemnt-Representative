@@ -9,6 +9,9 @@ import json
 import logging
 import re
 import smtplib
+import threading
+import time
+from copy import deepcopy
 from typing import Any, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -33,6 +36,67 @@ TIMEZONE_ALIASES = {
     "africa/niarobi": "Africa/Nairobi",
     "africa/nairobi": "Africa/Nairobi",
 }
+
+_tenant_cache_lock = threading.Lock()
+_app_user_cache: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
+_org_list_cache: dict[tuple[Any, ...], tuple[float, list[dict[str, Any]]]] = {}
+_org_resolve_cache: dict[tuple[Any, ...], tuple[float, int]] = {}
+
+
+def clear_tenant_caches() -> None:
+    """Clear short-lived tenant caches after membership, organization, or plan writes."""
+    with _tenant_cache_lock:
+        _app_user_cache.clear()
+        _org_list_cache.clear()
+        _org_resolve_cache.clear()
+
+
+def _cache_enabled() -> bool:
+    return settings.tenant_cache_ttl_seconds > 0
+
+
+def _cache_expiry() -> float:
+    return time.time() + settings.tenant_cache_ttl_seconds
+
+
+def _cache_namespace() -> int:
+    return id(get_conn)
+
+
+def _identity_cache_key(claims: dict[str, Any]) -> tuple[Any, ...]:
+    identity = user_identity_from_claims(claims)
+    return (
+        _cache_namespace(),
+        identity["clerk_user_id"],
+        identity["email"],
+        identity["name"],
+    )
+
+
+def _roles_cache_key(roles: set[str]) -> tuple[str, ...]:
+    return tuple(sorted(roles))
+
+
+def _get_cache(cache: dict[tuple[Any, ...], tuple[float, Any]], key: tuple[Any, ...]) -> Any | None:
+    if not _cache_enabled():
+        return None
+    now = time.time()
+    with _tenant_cache_lock:
+        item = cache.get(key)
+        if not item:
+            return None
+        expires_at, value = item
+        if expires_at <= now:
+            cache.pop(key, None)
+            return None
+        return deepcopy(value)
+
+
+def _set_cache(cache: dict[tuple[Any, ...], tuple[float, Any]], key: tuple[Any, ...], value: Any) -> None:
+    if not _cache_enabled():
+        return
+    with _tenant_cache_lock:
+        cache[key] = (_cache_expiry(), deepcopy(value))
 
 
 def now_iso() -> str:
@@ -118,6 +182,10 @@ def user_identity_from_claims(claims: dict[str, Any]) -> dict[str, str | None]:
 def ensure_app_user(claims: dict[str, Any]) -> dict[str, Any]:
     """Upsert the authenticated platform user from Clerk claims."""
     identity = user_identity_from_claims(claims)
+    cache_key = _identity_cache_key(claims)
+    cached = _get_cache(_app_user_cache, cache_key)
+    if cached:
+        return cached
     owner_emails = settings.platform_owner_email_set
     platform_role = (
         "system_owner"
@@ -168,7 +236,9 @@ def ensure_app_user(claims: dict[str, Any]) -> dict[str, Any]:
                     ),
                 )
                 user_id = cur.lastrowid
-        return dict_from_row(conn.execute("SELECT * FROM app_users WHERE id = ?", (user_id,)).fetchone())
+        user = dict_from_row(conn.execute("SELECT * FROM app_users WHERE id = ?", (user_id,)).fetchone())
+        _set_cache(_app_user_cache, cache_key, user)
+        return user
 
 
 def require_system_owner(claims: dict[str, Any]) -> dict[str, Any]:
@@ -207,18 +277,32 @@ def resolve_organization_id(
 ) -> int:
     """Resolve the active organization for a request and enforce membership."""
     allowed = allowed_roles or READ_ROLES
+    cache_key = (
+        *_identity_cache_key(claims),
+        int(requested_organization_id) if requested_organization_id else None,
+        _roles_cache_key(allowed),
+    )
+    cached = _get_cache(_org_resolve_cache, cache_key)
+    if cached is not None:
+        return int(cached)
     user = ensure_app_user(claims)
     if requested_organization_id:
-        require_org_role(claims, int(requested_organization_id), allowed)
-        return int(requested_organization_id)
+        resolved = int(requested_organization_id)
+        require_org_role(claims, resolved, allowed)
+        _set_cache(_org_resolve_cache, cache_key, resolved)
+        return resolved
 
     organizations = list_organizations(claims)
     if organizations:
-        return int(organizations[0]["id"])
+        resolved = int(organizations[0]["id"])
+        _set_cache(_org_resolve_cache, cache_key, resolved)
+        return resolved
 
     if user.get("platform_role") == "system_owner":
         default_org = get_organization(1)
-        return int(default_org["id"])
+        resolved = int(default_org["id"])
+        _set_cache(_org_resolve_cache, cache_key, resolved)
+        return resolved
     raise PermissionError("organization access denied")
 
 
@@ -370,6 +454,7 @@ def create_subscription_plan(data: dict[str, Any], actor_claims: dict[str, Any])
                     json.dumps({"actor_user_id": actor["id"]}),
                 ),
             )
+    clear_tenant_caches()
     return get_subscription_plan(int(plan_id))
 
 
@@ -407,6 +492,7 @@ def update_subscription_plan(
                     json.dumps({"actor_user_id": actor["id"]}),
                 ),
             )
+    clear_tenant_caches()
     return get_subscription_plan(plan_id)
 
 
@@ -580,6 +666,7 @@ def select_organization_plan(
                     json.dumps({"actor_user_id": actor_ctx["user"]["id"]}),
                 ),
             )
+    clear_tenant_caches()
     return get_organization_subscription(organization_id)
 
 
@@ -611,6 +698,7 @@ def create_organization(
                     json.dumps({"actor_user_id": actor["id"]}),
                 ),
             )
+        clear_tenant_caches()
         return get_organization(organization_id)
 
 
@@ -644,6 +732,7 @@ def update_organization(
                     json.dumps({"actor_user_id": actor_ctx["user"]["id"]}),
                 ),
             )
+    clear_tenant_caches()
     return get_organization(organization_id)
 
 
@@ -657,6 +746,10 @@ def get_organization(organization_id: int) -> dict[str, Any]:
 
 
 def list_organizations(actor_claims: dict[str, Any]) -> list[dict[str, Any]]:
+    cache_key = _identity_cache_key(actor_claims)
+    cached = _get_cache(_org_list_cache, cache_key)
+    if cached is not None:
+        return cached
     user = ensure_app_user(actor_claims)
     with get_conn() as conn:
         if user.get("platform_role") == "system_owner":
@@ -674,6 +767,7 @@ def list_organizations(actor_claims: dict[str, Any]) -> list[dict[str, Any]]:
         for organization in organizations:
             organization["capabilities"] = role_capabilities(organization.get("current_user_role", "viewer"))
             organization["subscription"] = get_organization_subscription(int(organization["id"]))
+        _set_cache(_org_list_cache, cache_key, organizations)
         return organizations
 
 
@@ -714,6 +808,7 @@ def upsert_org_user(
                     json.dumps({"actor_user_id": actor_ctx["user"]["id"]}),
                 ),
             )
+        clear_tenant_caches()
         return get_organization_user(organization_id, user_id)
 
 

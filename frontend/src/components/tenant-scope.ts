@@ -7,6 +7,7 @@ import { fetchWithAuthRetry } from '@/lib/auth-fetch'
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 const STORAGE_KEY = 'sdr:selectedOrganizationId'
 const EVENT_NAME = 'sdr:organization-changed'
+const TENANT_CACHE_TTL_MS = 60_000
 
 export interface OrganizationCapabilities {
   can_create_organizations: boolean
@@ -68,8 +69,26 @@ export interface TenantOrganization {
   subscription?: OrganizationSubscription
 }
 
+type TenantSnapshot = {
+  organizations: TenantOrganization[]
+  selectedOrganizationId: number | null
+}
+
+let tenantCache:
+  | {
+      userId: string
+      expiresAt: number
+      snapshot: TenantSnapshot
+    }
+  | null = null
+let tenantInflight: Promise<TenantSnapshot> | null = null
+let tenantInflightUserId: string | null = null
+
 export function notifyOrganizationChanged(organizationId: number) {
   window.localStorage.setItem(STORAGE_KEY, String(organizationId))
+  if (tenantCache) {
+    tenantCache.snapshot.selectedOrganizationId = organizationId
+  }
   window.dispatchEvent(new CustomEvent(EVENT_NAME, { detail: { organizationId } }))
 }
 
@@ -86,22 +105,52 @@ export function useTenantScope() {
   const [selectedOrganizationId, setSelectedOrganizationId] = useState<number | null>(null)
   const [loading, setLoading] = useState(true)
 
-  const loadOrganizations = useCallback(async () => {
+  const loadOrganizations = useCallback(async (force = false) => {
     if (!isLoaded || !userId) return
-    setLoading(true)
+    const cached = tenantCache?.userId === userId && tenantCache.expiresAt > Date.now()
+      ? tenantCache.snapshot
+      : null
+    if (cached && !force) {
+      setOrganizations(cached.organizations)
+      setSelectedOrganizationId(cached.selectedOrganizationId)
+      setLoading(false)
+      return
+    }
+    setLoading(!cached)
     try {
-      const res = await fetchWithAuthRetry(getToken, `${API_BASE}/api/me`)
-      if (!res.ok) {
-        setOrganizations([])
-        setSelectedOrganizationId(null)
-        return
+      if (force) {
+        tenantCache = null
       }
-      const data = await res.json() as { organizations?: TenantOrganization[] }
-      const orgs = data.organizations || []
-      setOrganizations(orgs)
-      const stored = Number(window.localStorage.getItem(STORAGE_KEY) || 0)
-      const selected = orgs.find(org => org.id === stored) || orgs[0] || null
-      setSelectedOrganizationId(selected?.id || null)
+      if (!tenantInflight || tenantInflightUserId !== userId) {
+        tenantInflightUserId = userId
+        tenantInflight = (async () => {
+          const res = await fetchWithAuthRetry(getToken, `${API_BASE}/api/me`)
+          if (!res.ok) {
+            return { organizations: [], selectedOrganizationId: null }
+          }
+          const data = await res.json() as { organizations?: TenantOrganization[] }
+          const orgs = data.organizations || []
+          const stored = Number(window.localStorage.getItem(STORAGE_KEY) || 0)
+          const selected = orgs.find(org => org.id === stored) || orgs[0] || null
+          const snapshot = {
+            organizations: orgs,
+            selectedOrganizationId: selected?.id || null,
+          }
+          tenantCache = {
+            userId,
+            expiresAt: Date.now() + TENANT_CACHE_TTL_MS,
+            snapshot,
+          }
+          return snapshot
+        })().finally(() => {
+          tenantInflight = null
+          tenantInflightUserId = null
+        })
+      }
+      const snapshot = await tenantInflight
+      setOrganizations(snapshot.organizations)
+      setSelectedOrganizationId(snapshot.selectedOrganizationId)
+      const selected = snapshot.organizations.find(org => org.id === snapshot.selectedOrganizationId) || null
       if (selected) {
         window.localStorage.setItem(STORAGE_KEY, String(selected.id))
       }
@@ -122,7 +171,7 @@ export function useTenantScope() {
       const custom = event as CustomEvent<{ organizationId?: number }>
       const next = custom.detail?.organizationId || Number(window.localStorage.getItem(STORAGE_KEY) || 0)
       if (next) setSelectedOrganizationId(next)
-      void loadOrganizations()
+      void loadOrganizations(true)
     }
     window.addEventListener(EVENT_NAME, onChange)
     return () => window.removeEventListener(EVENT_NAME, onChange)

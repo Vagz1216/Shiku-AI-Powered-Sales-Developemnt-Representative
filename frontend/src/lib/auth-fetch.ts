@@ -1,5 +1,7 @@
 type GetToken = (options?: { skipCache?: boolean }) => Promise<string | null>
 
+let tokenRefreshPromise: Promise<string | null> | null = null
+
 function tokenExpiresSoon(token: string, skewSeconds = 30) {
   const payload = token.split('.')[1]
   if (!payload) return false
@@ -14,15 +16,24 @@ function tokenExpiresSoon(token: string, skewSeconds = 30) {
   }
 }
 
+function getFreshToken(getToken: GetToken) {
+  if (!tokenRefreshPromise) {
+    tokenRefreshPromise = getToken({ skipCache: true }).finally(() => {
+      tokenRefreshPromise = null
+    })
+  }
+  return tokenRefreshPromise
+}
+
 export async function fetchWithAuthRetry(
   getToken: GetToken,
   input: RequestInfo | URL,
   init: RequestInit = {},
 ) {
   const request = async (skipCache = false) => {
-    let token = await getToken(skipCache ? { skipCache: true } : undefined)
+    let token = skipCache ? await getFreshToken(getToken) : await getToken()
     if (token && !skipCache && tokenExpiresSoon(token)) {
-      token = await getToken({ skipCache: true })
+      token = await getFreshToken(getToken)
     }
     const headers = new Headers(init.headers)
     if (token) headers.set('Authorization', `Bearer ${token}`)
