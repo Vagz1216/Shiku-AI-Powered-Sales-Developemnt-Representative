@@ -202,7 +202,7 @@ def record_llm_usage(
                 estimated_cost_usd,
                 pricing_source,
                 pricing_version(),
-                bool(fallback_triggered),
+                1 if fallback_triggered else 0,
                 attempt_count,
                 tool_call_count,
                 status,
@@ -229,7 +229,7 @@ def get_usage_summary(limit: int = 100, organization_id: int | None = None) -> d
                 "COALESCE(SUM(output_tokens), 0) AS output_tokens, "
                 "COALESCE(SUM(total_tokens), 0) AS total_tokens, "
                 "COALESCE(SUM(estimated_cost_usd), 0) AS estimated_cost_usd, "
-                "COALESCE(SUM(CASE WHEN fallback_triggered THEN 1 ELSE 0 END), 0) AS fallback_count, "
+                "COALESCE(SUM(CASE WHEN fallback_triggered = 1 THEN 1 ELSE 0 END), 0) AS fallback_count, "
                 "COALESCE(SUM(CASE WHEN pricing_source = 'unpriced' THEN 1 ELSE 0 END), 0) AS unpriced_count, "
                 "COALESCE(SUM(CASE WHEN estimated_cost_usd = 0 AND pricing_source != 'unpriced' THEN 1 ELSE 0 END), 0) AS zero_cost_priced_count, "
                 "COALESCE(AVG(latency_ms), 0) AS avg_latency_ms "
