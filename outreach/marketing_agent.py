@@ -239,6 +239,23 @@ class OutreachOrchestrator:
                                             (campaign_org_id, lead_data.get("id"), campaign.id, review_result.subject, review_result.body)
                                         )
                                         draft_id = cur.lastrowid
+                                        logger.info(
+                                            "Draft saved for human approval",
+                                            extra={
+                                                "kind": "draft_created",
+                                                "component": "outreach",
+                                                "data": {
+                                                    "draft_id": draft_id,
+                                                    "organization_id": campaign_org_id,
+                                                    "campaign_id": campaign.id,
+                                                    "lead_id": lead_data.get("id"),
+                                                    "status": "DRAFT",
+                                                    "approved": 0,
+                                                    "direction": "outbound",
+                                                    "auto_approve_drafts": False,
+                                                },
+                                            },
+                                        )
                                         campaign_context_service.record_outbound(
                                             conn,
                                             organization_id=campaign_org_id,
@@ -276,7 +293,7 @@ class OutreachOrchestrator:
                                         "selected_draft_type": review_result.selected_draft_type,
                                     })
                                     if callback:
-                                        await callback("success", f"Saved draft for human approval: {lead_info['email']}")
+                                        await callback("success", f"Saved draft #{draft_id} for human approval: {lead_info['email']}")
                                 except Exception as e:
                                     metering_service.update_ai_usage_action(
                                         usage_action.get("id"),
