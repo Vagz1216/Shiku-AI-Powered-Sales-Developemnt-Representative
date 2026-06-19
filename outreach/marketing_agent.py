@@ -231,29 +231,39 @@ class OutreachOrchestrator:
                                     if callback:
                                         await callback("error", f"Email delivery failed for {lead_info['email']}: {send_res.error}")
                             else:
+                                draft_log_data = {
+                                    "organization_id": campaign_org_id,
+                                    "campaign_id": campaign.id,
+                                    "lead_id": lead_data.get("id"),
+                                    "lead_email": lead_info["email"],
+                                    "status": "DRAFT",
+                                    "approved": 0,
+                                    "direction": "outbound",
+                                    "auto_approve_drafts": False,
+                                }
                                 try:
                                     from utils.db_connection import get_conn
+                                    logger.info(
+                                        "Attempting to save draft for human approval",
+                                        extra={
+                                            "kind": "draft_save_attempt",
+                                            "component": "outreach",
+                                            "data": draft_log_data,
+                                        },
+                                    )
                                     with get_conn() as conn:
                                         cur = conn.execute(
                                             "INSERT INTO email_messages (organization_id, lead_id, campaign_id, direction, subject, body, status, approved) VALUES (?, ?, ?, 'outbound', ?, ?, 'DRAFT', 0)",
                                             (campaign_org_id, lead_data.get("id"), campaign.id, review_result.subject, review_result.body)
                                         )
                                         draft_id = cur.lastrowid
+                                        draft_log_data["draft_id"] = draft_id
                                         logger.info(
                                             "Draft saved for human approval",
                                             extra={
                                                 "kind": "draft_created",
                                                 "component": "outreach",
-                                                "data": {
-                                                    "draft_id": draft_id,
-                                                    "organization_id": campaign_org_id,
-                                                    "campaign_id": campaign.id,
-                                                    "lead_id": lead_data.get("id"),
-                                                    "status": "DRAFT",
-                                                    "approved": 0,
-                                                    "direction": "outbound",
-                                                    "auto_approve_drafts": False,
-                                                },
+                                                "data": draft_log_data,
                                             },
                                         )
                                         campaign_context_service.record_outbound(
@@ -295,6 +305,17 @@ class OutreachOrchestrator:
                                     if callback:
                                         await callback("success", f"Saved draft #{draft_id} for human approval: {lead_info['email']}")
                                 except Exception as e:
+                                    logger.exception(
+                                        "Failed to save outbound draft for human approval",
+                                        extra={
+                                            "kind": "draft_save_failed",
+                                            "component": "outreach",
+                                            "data": {
+                                                **draft_log_data,
+                                                "error": str(e),
+                                            },
+                                        },
+                                    )
                                     metering_service.update_ai_usage_action(
                                         usage_action.get("id"),
                                         action_type="outreach_draft_create_failed",
@@ -308,7 +329,6 @@ class OutreachOrchestrator:
                                         "status": "failed",
                                         "error": str(e),
                                     })
-                                    logger.error(f"Failed to save draft to database: {e}")
                                     if callback:
                                         await callback("error", f"Failed to save draft for {lead_info['email']}: {e}")
                     except Exception as lead_error:

@@ -128,6 +128,16 @@ async def sync_unread_mailbox(
     from email_monitor.monitor import email_monitor
 
     mailbox = _resolve_mailbox(mailbox_id=mailbox_id, organization_id=organization_id, provider="smtp_imap")
+    logger.info(
+        "Starting IMAP mailbox sync",
+        extra={
+            "kind": "mailbox_sync_start",
+            "component": "mailbox",
+            "data": {"organization_id": organization_id, "mailbox_id": mailbox_id, "limit": limit},
+        },
+    )
+    if callback:
+        await callback("info", f"Checking unread IMAP messages for mailbox {mailbox_id}")
     client = _imap_client(mailbox)
     processed: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
@@ -139,6 +149,16 @@ async def sync_unread_mailbox(
         if status != "OK":
             raise RuntimeError("IMAP search failed")
         uids = (data[0] or b"").split()[:limit]
+        logger.info(
+            "IMAP unread search completed",
+            extra={
+                "kind": "mailbox_sync_unread_found",
+                "component": "mailbox",
+                "data": {"organization_id": organization_id, "mailbox_id": mailbox_id, "count": len(uids)},
+            },
+        )
+        if callback:
+            await callback("info", f"Found {len(uids)} unread IMAP message(s)")
         for uid in uids:
             uid_text = uid.decode("ascii", errors="ignore")
             try:
@@ -150,6 +170,22 @@ async def sync_unread_mailbox(
                 sender_email = _extract_email_address(message_payload["from"])
                 route = _route_inbound_sender(sender_email, organization_id)
                 if not route["process"]:
+                    logger.info(
+                        "Skipping inbound IMAP message",
+                        extra={
+                            "kind": "mailbox_sync_skipped",
+                            "component": "mailbox",
+                            "data": {
+                                "organization_id": organization_id,
+                                "mailbox_id": mailbox_id,
+                                "uid": uid_text,
+                                "sender_email": sender_email,
+                                "reason": route["reason"],
+                            },
+                        },
+                    )
+                    if callback:
+                        await callback("warning", f"Skipping IMAP message from {sender_email}: {route['reason']}")
                     skipped.append(
                         {
                             "uid": uid_text,
@@ -161,7 +197,38 @@ async def sync_unread_mailbox(
                     continue
 
                 message_payload["campaign_id"] = route["campaign_id"]
+                logger.info(
+                    "Processing inbound IMAP message",
+                    extra={
+                        "kind": "mailbox_sync_processing",
+                        "component": "mailbox",
+                        "data": {
+                            "organization_id": organization_id,
+                            "mailbox_id": mailbox_id,
+                            "uid": uid_text,
+                            "sender_email": sender_email,
+                            "campaign_id": route["campaign_id"],
+                        },
+                    },
+                )
                 result = await email_monitor.process_incoming_email(message_payload, callback=callback)
+                logger.info(
+                    "Inbound IMAP message processed",
+                    extra={
+                        "kind": "mailbox_sync_processed",
+                        "component": "mailbox",
+                        "data": {
+                            "organization_id": organization_id,
+                            "mailbox_id": mailbox_id,
+                            "uid": uid_text,
+                            "sender_email": sender_email,
+                            "campaign_id": route["campaign_id"],
+                            "action": result.action_taken,
+                            "success": result.success,
+                            "error": result.error,
+                        },
+                    },
+                )
                 processed.append(
                     {
                         "uid": uid_text,
@@ -175,7 +242,21 @@ async def sync_unread_mailbox(
                 if mark_seen:
                     client.uid("STORE", uid, "+FLAGS", r"(\Seen)")
             except Exception as exc:
-                logger.exception("Failed to process IMAP message uid=%s", uid_text)
+                logger.exception(
+                    "Failed to process IMAP message",
+                    extra={
+                        "kind": "mailbox_sync_error",
+                        "component": "mailbox",
+                        "data": {
+                            "organization_id": organization_id,
+                            "mailbox_id": mailbox_id,
+                            "uid": uid_text,
+                            "error": str(exc),
+                        },
+                    },
+                )
+                if callback:
+                    await callback("error", f"Failed to process IMAP message {uid_text}: {exc}")
                 errors.append({"uid": uid_text, "error": str(exc)})
     finally:
         try:
@@ -184,6 +265,22 @@ async def sync_unread_mailbox(
             pass
 
     _update_mailbox_sync_state(mailbox_id, None if not errors else f"{len(errors)} sync error(s)")
+    logger.info(
+        "IMAP mailbox sync completed",
+        extra={
+            "kind": "mailbox_sync_complete",
+            "component": "mailbox",
+            "data": {
+                "organization_id": organization_id,
+                "mailbox_id": mailbox_id,
+                "processed": len(processed),
+                "skipped": len(skipped),
+                "errors": len(errors),
+            },
+        },
+    )
+    if callback:
+        await callback("success", f"Mailbox sync complete: {len(processed)} processed, {len(skipped)} skipped, {len(errors)} errors")
     return {
         "mailbox_id": mailbox_id,
         "checked": len(processed) + len(skipped) + len(errors),
