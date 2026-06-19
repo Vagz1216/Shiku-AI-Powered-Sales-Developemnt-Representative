@@ -8,6 +8,7 @@ from fastapi import Request, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import jwt, JWTError
 from dotenv import load_dotenv
+from utils.request_timing import timed_step
 
 load_dotenv()
 
@@ -154,7 +155,8 @@ async def get_current_user(request: Request, auth: Optional[HTTPAuthorizationCre
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    payload = await clerk_auth.verify_token(token)
+    with timed_step(request, "auth.verify_token"):
+        payload = await clerk_auth.verify_token(token)
     if not payload:
         raise HTTPException(
             status_code=401,

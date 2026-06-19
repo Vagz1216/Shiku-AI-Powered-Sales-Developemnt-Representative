@@ -56,6 +56,7 @@ from services import (
 )
 from services.mailbox_transport import sync_unread_mailbox
 from services.resend_email import normalize_resend_received_email, verify_resend_webhook_signature
+from utils.request_timing import get_timings, timed_step
 
 # Setup logging
 setup_logging()
@@ -177,6 +178,21 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
                     "status_code": response.status_code,
                 },
             )
+            route_timings = get_timings(request)
+            if route_timings:
+                logger.info(
+                    f"Route timing: {request.method} {request.url.path}",
+                    extra={
+                        "kind": "route_timing",
+                        "component": "api",
+                        "request_id": request_id,
+                        "duration_ms": round(process_time * 1000, 2),
+                        "status_code": response.status_code,
+                        "method": request.method,
+                        "path": request.url.path,
+                        "steps": route_timings,
+                    },
+                )
             org_id = metering_service.get_current_organization_id()
             if org_id and not request.url.path.startswith("/api/usage"):
                 try:
@@ -196,6 +212,24 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
                 except Exception as usage_error:
                     logger.warning(f"Failed to record platform usage event: {usage_error}")
             return response
+        except Exception:
+            process_time = time.time() - start_time
+            route_timings = get_timings(request)
+            if route_timings:
+                logger.error(
+                    f"Route timing failed: {request.method} {request.url.path}",
+                    extra={
+                        "kind": "route_timing",
+                        "component": "api",
+                        "request_id": request_id,
+                        "duration_ms": round(process_time * 1000, 2),
+                        "status_code": 500,
+                        "method": request.method,
+                        "path": request.url.path,
+                        "steps": route_timings,
+                    },
+                )
+            raise
         finally:
             metering_service.reset_current_organization_id(org_token)
             metering_service.reset_current_user_id(user_token)
@@ -397,11 +431,13 @@ def _workflow_org_id(
 
 
 @app.get("/api/me")
-async def get_me(user: dict = Depends(get_current_user)):
+async def get_me(request: Request, user: dict = Depends(get_current_user)):
     """Return the authenticated user's local platform profile and organizations."""
     try:
-        app_user = tenant_service.ensure_app_user(user)
-        organizations = tenant_service.list_organizations(user)
+        with timed_step(request, "tenant.ensure_app_user"):
+            app_user = tenant_service.ensure_app_user(user)
+        with timed_step(request, "tenant.list_organizations"):
+            organizations = tenant_service.list_organizations(user)
         return {"user": app_user, "organizations": organizations}
     except Exception as e:
         _raise_service_error(e)
@@ -607,18 +643,23 @@ async def sync_mailbox(
 # Outreach endpoints
 @app.get("/api/campaigns")
 async def list_campaigns(
+    request: Request,
     user: dict = Depends(get_current_user),
     active_only: bool = True,
     organization_id: Optional[int] = None,
 ):
     """List campaigns. If active_only is true, returns only ACTIVE campaigns."""
     try:
-        resolved_org_id = _org_id(user, organization_id, tenant_service.READ_ROLES)
-        if active_only:
-            campaigns = get_active_campaigns(resolved_org_id)
-        else:
-            campaigns = get_all_campaigns(resolved_org_id)
-        return {"campaigns": [c.dict() for c in campaigns]}
+        with timed_step(request, "tenant.resolve_org"):
+            resolved_org_id = _org_id(user, organization_id, tenant_service.READ_ROLES)
+        with timed_step(request, "campaigns.query", active_only=active_only):
+            if active_only:
+                campaigns = get_active_campaigns(resolved_org_id)
+            else:
+                campaigns = get_all_campaigns(resolved_org_id)
+        with timed_step(request, "campaigns.serialize", count=len(campaigns)):
+            serialized = [c.dict() for c in campaigns]
+        return {"campaigns": serialized}
     except HTTPException:
         raise
     except Exception as e:
@@ -701,18 +742,26 @@ class CampaignStaffAssignmentRequest(BaseModel):
 
 
 @app.get("/api/staff")
-async def list_staff(user: dict = Depends(get_current_user), organization_id: Optional[int] = None):
+async def list_staff(
+    request: Request,
+    user: dict = Depends(get_current_user),
+    organization_id: Optional[int] = None,
+):
     """List all staff available for campaign assignment and meeting notifications."""
     try:
         from utils.db_connection import get_conn
-        resolved_org_id = _org_id(user, organization_id, tenant_service.READ_ROLES)
-        with get_conn() as conn:
-            cur = conn.execute(
-                "SELECT id, name, email, timezone, availability, dummy_slots, created_at "
-                "FROM staff WHERE organization_id = ? ORDER BY id ASC",
-                (resolved_org_id,),
-            )
-            staff = [dict(row) for row in cur.fetchall()]
+        with timed_step(request, "tenant.resolve_org"):
+            resolved_org_id = _org_id(user, organization_id, tenant_service.READ_ROLES)
+        with timed_step(request, "staff.query"):
+            with get_conn() as conn:
+                cur = conn.execute(
+                    "SELECT id, name, email, timezone, availability, dummy_slots, created_at "
+                    "FROM staff WHERE organization_id = ? ORDER BY id ASC",
+                    (resolved_org_id,),
+                )
+                rows = cur.fetchall()
+        with timed_step(request, "staff.serialize", count=len(rows)):
+            staff = [dict(row) for row in rows]
         return {"staff": staff}
     except Exception as e:
         logger.error(f"Failed to list staff: {e}")
@@ -820,30 +869,35 @@ async def delete_staff_member(
 @app.get("/api/campaigns/{campaign_id}/staff")
 async def get_campaign_staff(
     campaign_id: int,
+    request: Request,
     user: dict = Depends(get_current_user),
     organization_id: Optional[int] = None,
 ):
     """Get all staff with assignment state for a campaign."""
     try:
         from utils.db_connection import get_conn
-        resolved_org_id = _org_id(user, organization_id, tenant_service.READ_ROLES)
-        with get_conn() as conn:
-            c = conn.execute(
-                "SELECT id, name FROM campaigns WHERE id = ? AND organization_id = ?",
-                (campaign_id, resolved_org_id),
-            ).fetchone()
-            if not c:
-                raise HTTPException(status_code=404, detail="Campaign not found")
+        with timed_step(request, "tenant.resolve_org"):
+            resolved_org_id = _org_id(user, organization_id, tenant_service.READ_ROLES)
+        with timed_step(request, "campaign_staff.query"):
+            with get_conn() as conn:
+                c = conn.execute(
+                    "SELECT id, name FROM campaigns WHERE id = ? AND organization_id = ?",
+                    (campaign_id, resolved_org_id),
+                ).fetchone()
+                if not c:
+                    raise HTTPException(status_code=404, detail="Campaign not found")
 
-            cur = conn.execute(
-                "SELECT s.id, s.name, s.email, s.timezone, "
-                "CASE WHEN cs.campaign_id IS NULL THEN 0 ELSE 1 END AS assigned "
-                "FROM staff s "
-                "LEFT JOIN campaign_staff cs ON cs.staff_id = s.id AND cs.campaign_id = ? "
-                "WHERE s.organization_id = ? ORDER BY s.id ASC",
-                (campaign_id, resolved_org_id),
-            )
-            staff = [dict(row) for row in cur.fetchall()]
+                cur = conn.execute(
+                    "SELECT s.id, s.name, s.email, s.timezone, "
+                    "CASE WHEN cs.campaign_id IS NULL THEN 0 ELSE 1 END AS assigned "
+                    "FROM staff s "
+                    "LEFT JOIN campaign_staff cs ON cs.staff_id = s.id AND cs.campaign_id = ? "
+                    "WHERE s.organization_id = ? ORDER BY s.id ASC",
+                    (campaign_id, resolved_org_id),
+                )
+                rows = cur.fetchall()
+        with timed_step(request, "campaign_staff.serialize", count=len(rows)):
+            staff = [dict(row) for row in rows]
         return {"campaign_id": campaign_id, "staff": staff}
     except HTTPException:
         raise
@@ -899,43 +953,51 @@ async def replace_campaign_staff(
 
 
 @app.get("/api/leads")
-async def list_leads(user: dict = Depends(get_current_user), organization_id: Optional[int] = None):
+async def list_leads(
+    request: Request,
+    user: dict = Depends(get_current_user),
+    organization_id: Optional[int] = None,
+):
     """List leads with outreach status, campaign context, and last outbound activity."""
     try:
         from utils.db_connection import get_conn, sql_group_concat_distinct, sql_order_by_datetime
 
-        resolved_org_id = _org_id(user, organization_id, tenant_service.READ_ROLES)
+        with timed_step(request, "tenant.resolve_org"):
+            resolved_org_id = _org_id(user, organization_id, tenant_service.READ_ROLES)
         odt = sql_order_by_datetime("em.created_at")
         gcat = sql_group_concat_distinct("c.name")
-        with get_conn() as conn:
-            cur = conn.execute(
-                "SELECT "
-                "l.id, l.name, l.email, l.company, l.industry, l.pain_points, "
-                "l.status, l.touch_count, l.email_opt_out, "
-                "l.last_contacted_at, l.last_inbound_at, l.created_at, "
-                "COALESCE(SUM(cl.emails_sent), 0) AS emails_sent, "
-                "COALESCE(MAX(CAST(cl.responded AS INTEGER)), 0) AS responded, "
-                "COALESCE(MAX(CAST(cl.meeting_booked AS INTEGER)), 0) AS meeting_booked, "
-                f"{gcat} AS campaigns, "
-                f"{sql_group_concat_distinct('c.id')} AS campaign_ids, "
-                "(SELECT em.status FROM email_messages em "
-                " WHERE em.lead_id = l.id AND em.direction = 'outbound' "
-                f" ORDER BY {odt} DESC LIMIT 1) AS last_outbound_status, "
-                "(SELECT em.subject FROM email_messages em "
-                " WHERE em.lead_id = l.id AND em.direction = 'outbound' "
-                f" ORDER BY {odt} DESC LIMIT 1) AS last_outbound_subject, "
-                "(SELECT em.created_at FROM email_messages em "
-                " WHERE em.lead_id = l.id AND em.direction = 'outbound' "
-                f" ORDER BY {odt} DESC LIMIT 1) AS last_outbound_at "
-                "FROM leads l "
-                "LEFT JOIN campaign_leads cl ON cl.lead_id = l.id "
-                "LEFT JOIN campaigns c ON c.id = cl.campaign_id AND c.organization_id = l.organization_id "
-                "WHERE l.organization_id = ? "
-                "GROUP BY l.id "
-                "ORDER BY l.id ASC",
-                (resolved_org_id,),
-            )
-            leads = [dict(row) for row in cur.fetchall()]
+        with timed_step(request, "leads.query"):
+            with get_conn() as conn:
+                cur = conn.execute(
+                    "SELECT "
+                    "l.id, l.name, l.email, l.company, l.industry, l.pain_points, "
+                    "l.status, l.touch_count, l.email_opt_out, "
+                    "l.last_contacted_at, l.last_inbound_at, l.created_at, "
+                    "COALESCE(SUM(cl.emails_sent), 0) AS emails_sent, "
+                    "COALESCE(MAX(CAST(cl.responded AS INTEGER)), 0) AS responded, "
+                    "COALESCE(MAX(CAST(cl.meeting_booked AS INTEGER)), 0) AS meeting_booked, "
+                    f"{gcat} AS campaigns, "
+                    f"{sql_group_concat_distinct('c.id')} AS campaign_ids, "
+                    "(SELECT em.status FROM email_messages em "
+                    " WHERE em.lead_id = l.id AND em.direction = 'outbound' "
+                    f" ORDER BY {odt} DESC LIMIT 1) AS last_outbound_status, "
+                    "(SELECT em.subject FROM email_messages em "
+                    " WHERE em.lead_id = l.id AND em.direction = 'outbound' "
+                    f" ORDER BY {odt} DESC LIMIT 1) AS last_outbound_subject, "
+                    "(SELECT em.created_at FROM email_messages em "
+                    " WHERE em.lead_id = l.id AND em.direction = 'outbound' "
+                    f" ORDER BY {odt} DESC LIMIT 1) AS last_outbound_at "
+                    "FROM leads l "
+                    "LEFT JOIN campaign_leads cl ON cl.lead_id = l.id "
+                    "LEFT JOIN campaigns c ON c.id = cl.campaign_id AND c.organization_id = l.organization_id "
+                    "WHERE l.organization_id = ? "
+                    "GROUP BY l.id "
+                    "ORDER BY l.id ASC",
+                    (resolved_org_id,),
+                )
+                rows = cur.fetchall()
+        with timed_step(request, "leads.serialize", count=len(rows)):
+            leads = [dict(row) for row in rows]
         return {"leads": leads}
     except Exception as e:
         logger.error(f"Failed to list leads: {e}")
@@ -1117,16 +1179,20 @@ async def import_leads_from_url(
 
 @app.get("/api/usage/llm")
 async def get_llm_usage(
+    request: Request,
     user: dict = Depends(get_current_user),
     limit: int = 100,
     organization_id: Optional[int] = None,
 ):
     """Return aggregate LLM token and estimated cost usage."""
-    resolved_org_id = _org_id(user, organization_id, tenant_service.READ_ROLES)
-    return usage_service.get_usage_summary(
-        limit=max(1, min(limit, 500)),
-        organization_id=resolved_org_id,
-    )
+    with timed_step(request, "tenant.resolve_org"):
+        resolved_org_id = _org_id(user, organization_id, tenant_service.READ_ROLES)
+    bounded_limit = max(1, min(limit, 500))
+    with timed_step(request, "usage.summary", limit=bounded_limit):
+        return usage_service.get_usage_summary(
+            limit=bounded_limit,
+            organization_id=resolved_org_id,
+        )
 
 
 @app.get("/api/usage/customer")
@@ -1273,6 +1339,7 @@ async def replace_campaign_leads(
 
 @app.get("/api/drafts")
 async def list_drafts(
+    request: Request,
     user: dict = Depends(get_current_user),
     q: Optional[str] = None,
     campaign_name: Optional[str] = None,
@@ -1283,41 +1350,59 @@ async def list_drafts(
     try:
         from utils.db_connection import get_conn, sql_order_by_datetime
 
-        resolved_org_id = _org_id(user, organization_id, tenant_service.READ_ROLES)
+        with timed_step(request, "tenant.resolve_org"):
+            resolved_org_id = _org_id(user, organization_id, tenant_service.READ_ROLES)
         order_created = sql_order_by_datetime("e.created_at")
-        where_clauses = ["e.organization_id = ?", "UPPER(e.status) = 'DRAFT'", "e.approved = 0", "e.direction = 'outbound'"]
-        params: list[Any] = [resolved_org_id]
+        with timed_step(
+            request,
+            "drafts.build_filters",
+            has_query=bool(q),
+            has_campaign=bool(campaign_name),
+            has_lead_email=bool(lead_email),
+        ):
+            where_clauses = [
+                "e.organization_id = ?",
+                "UPPER(e.status) = 'DRAFT'",
+                "e.approved = 0",
+                "e.direction = 'outbound'",
+            ]
+            params: list[Any] = [resolved_org_id]
 
-        if q:
-            where_clauses.append("(e.subject LIKE ? OR e.body LIKE ? OR l.name LIKE ? OR l.email LIKE ? OR c.name LIKE ?)")
-            q_like = f"%{q}%"
-            params.extend([q_like, q_like, q_like, q_like, q_like])
-        if campaign_name:
-            where_clauses.append("c.name = ?")
-            params.append(campaign_name)
-        if lead_email:
-            where_clauses.append("l.email = ?")
-            params.append(lead_email)
+            if q:
+                where_clauses.append(
+                    "(e.subject LIKE ? OR e.body LIKE ? OR l.name LIKE ? OR l.email LIKE ? OR c.name LIKE ?)"
+                )
+                q_like = f"%{q}%"
+                params.extend([q_like, q_like, q_like, q_like, q_like])
+            if campaign_name:
+                where_clauses.append("c.name = ?")
+                params.append(campaign_name)
+            if lead_email:
+                where_clauses.append("l.email = ?")
+                params.append(lead_email)
 
-        where_sql = " AND ".join(where_clauses)
+            where_sql = " AND ".join(where_clauses)
         with get_conn() as conn:
-            cur = conn.execute(
-                "SELECT e.id, e.subject, e.body, e.created_at, l.name as lead_name, l.email as lead_email, COALESCE(c.name, 'No campaign') as campaign_name "
-                "FROM email_messages e "
-                "JOIN leads l ON e.lead_id = l.id "
-                "LEFT JOIN campaigns c ON e.campaign_id = c.id "
-                f"WHERE {where_sql} "
-                f"ORDER BY {order_created} DESC",
-                tuple(params),
-            )
-            drafts = [dict(row) for row in cur.fetchall()]
-            attachment_map = draft_service.list_attachments_for_messages(
-                conn,
-                [draft["id"] for draft in drafts],
-            )
-            for draft in drafts:
-                draft["body"] = draft_service.clean_quick_reply_text(draft["body"])
-                draft["attachments"] = attachment_map.get(draft["id"], [])
+            with timed_step(request, "drafts.query"):
+                cur = conn.execute(
+                    "SELECT e.id, e.subject, e.body, e.created_at, l.name as lead_name, l.email as lead_email, COALESCE(c.name, 'No campaign') as campaign_name "
+                    "FROM email_messages e "
+                    "JOIN leads l ON e.lead_id = l.id "
+                    "LEFT JOIN campaigns c ON e.campaign_id = c.id "
+                    f"WHERE {where_sql} "
+                    f"ORDER BY {order_created} DESC",
+                    tuple(params),
+                )
+                drafts = [dict(row) for row in cur.fetchall()]
+            with timed_step(request, "drafts.attachments", count=len(drafts)):
+                attachment_map = draft_service.list_attachments_for_messages(
+                    conn,
+                    [draft["id"] for draft in drafts],
+                )
+            with timed_step(request, "drafts.serialize", count=len(drafts)):
+                for draft in drafts:
+                    draft["body"] = draft_service.clean_quick_reply_text(draft["body"])
+                    draft["attachments"] = attachment_map.get(draft["id"], [])
         return {"drafts": drafts}
     except Exception as e:
         logger.error(f"Failed to list drafts: {e}")
