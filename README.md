@@ -187,16 +187,35 @@ npm run build                # produces frontend/out/
 
 Set `NEXT_PUBLIC_API_URL` to your production API URL (CloudFront/App Runner on AWS, or Azure Container Apps/Front Door on Azure) so the browser calls the deployed backend.
 
-## Non-AWS deployment (recommended first)
+## Production Deployment (Coolify + Neon Postgres + Azure OpenAI)
 
-Before moving to Azure or AWS, use the lighter path now configured in this repo:
+The recommended production deployment path uses Coolify for the FastAPI backend, Vercel/Static hosting for the Next.js frontend, and Neon for serverless PostgreSQL.
 
-*   **Vercel** for the `frontend/` Next.js static dashboard
-*   **Render** for the Dockerized FastAPI backend
-*   **Render persistent disk + SQLite** as an interim database
-*   **Managed Postgres** before real customer traffic
+1. **Database (Neon PostgreSQL)**
+   * Create a Neon project and get your pooled connection string.
+   * Add the connection string to your environment: `DATABASE_URL=postgresql://user:password@ep-name.region.aws.neon.tech/neondb?sslmode=require`
+   * Run migrations using the script: `uv run scripts/apply_postgres_schema.py`
 
-The GitHub Actions pipeline runs backend tests, frontend lint/build, and deploys on `main` when platform secrets are configured. See **`docs/DEPLOY_VERCEL_RENDER.md`**.
+2. **Backend (Coolify)**
+   * Deploy the repository (`https://github.com/Vagz1216/Shiku-AI-Powered-Sales-Developemnt-Representative`) via Coolify as a Docker container.
+   * Copy the required variables from `.env.example` to Coolify's Environment Variables section.
+   * Ensure `PORT=8000` is exposed and mapped correctly.
+   * For Azure OpenAI, set:
+     ```env
+     AZURE_OPENAI_API_KEY=your_key
+     AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com
+     AZURE_OPENAI_DEPLOYMENT=your_deployment_name
+     AZURE_OPENAI_API_VERSION=2024-10-21
+     AZURE_OPENAI_WIRE_API=chat_completions
+     ```
+
+3. **Frontend (Vercel or Coolify Static)**
+   * The Next.js frontend can be deployed statically.
+   * Set `NEXT_PUBLIC_API_URL` to point to your Coolify backend domain.
+   * Run `npm run build` and serve the `out/` directory.
+
+4. **Webhooks**
+   * Configure AgentMail or Resend webhooks to point to your Coolify backend domain: `https://your-coolify-domain.com/webhook`
 
 ## AWS deployment (summary)
 
