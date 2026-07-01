@@ -12,43 +12,165 @@ import logging
 import re
 from typing import Any
 
-from utils.db_connection import dict_from_row, sql_bool_true
+from utils.db_connection import dict_from_row, sql_bool_true, using_postgres
 
 logger = logging.getLogger(__name__)
 
 SUMMARY_LIMIT = 320
+_SIGNOFF_WORDS = {
+    "best",
+    "best regards",
+    "regards",
+    "thanks",
+    "thank you",
+    "sincerely",
+    "cheers",
+}
 
 
 def _now_iso() -> str:
     return datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def summarize_text(text: str | None, limit: int = SUMMARY_LIMIT) -> str:
-    """Create a compact deterministic summary from email text.
+def _normalize_email_text(text: str | None) -> str:
+    cleaned = text or ""
+    cleaned = re.sub(r"<[^>]+>", " ", cleaned)
+    cleaned = re.sub(r"Reply with one token:.*$", "", cleaned, flags=re.IGNORECASE | re.DOTALL)
+    cleaned = re.sub(r"([.!?])(?=[A-Z])", r"\1 ", cleaned)
+    cleaned = re.sub(r",(?=[A-Z])", ", ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
 
-    This intentionally avoids an LLM call. It keeps the first meaningful
-    sentence-ish chunk and strips whitespace/quick-reply noise.
-    """
-    cleaned = re.sub(r"\s+", " ", text or "").strip()
-    cleaned = re.sub(r"Reply with one token:.*$", "", cleaned, flags=re.IGNORECASE).strip()
-    if len(cleaned) <= limit:
-        return cleaned
-    truncated = cleaned[:limit]
+
+def _is_context_noise(sentence: str) -> bool:
+    normalized = sentence.strip(" .,!?:;").lower()
+    if not normalized:
+        return True
+    if normalized in _SIGNOFF_WORDS:
+        return True
+    if len(normalized.split()) <= 3 and normalized.startswith(("hi ", "hello ", "dear ")):
+        return True
+    return False
+
+
+def _sentences(text: str) -> list[str]:
+    parts = re.split(r"(?<=[.!?])\s+", text)
+    return [part.strip(" \n\t") for part in parts if part.strip(" \n\t")]
+
+
+def _compact_to_limit(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    sentences = _sentences(text)
+    kept: list[str] = []
+    for sentence in sentences:
+        candidate = " ".join([*kept, sentence]).strip()
+        if len(candidate) > limit:
+            break
+        kept.append(sentence)
+    if kept:
+        return " ".join(kept)
+    truncated = text[:limit]
     boundary = max(truncated.rfind("."), truncated.rfind("!"), truncated.rfind("?"), truncated.rfind(";"))
     if boundary >= int(limit * 0.55):
         return truncated[: boundary + 1].strip()
-    return truncated.rstrip(" ,;:") + "..."
+    return truncated.rstrip(" ,;:")
+
+
+def summarize_text(text: str | None, limit: int = SUMMARY_LIMIT) -> str:
+    """Create complete review context from email text without an LLM call.
+
+    The review UI should not show a raw cut-off email fragment. For longer
+    messages, keep the core opening context and the latest ask/CTA so reviewers
+    can understand what happened without reading the full thread.
+    """
+    cleaned = _normalize_email_text(text)
+    if len(cleaned) <= limit:
+        return cleaned
+
+    meaningful = [sentence for sentence in _sentences(cleaned) if not _is_context_noise(sentence)]
+    if not meaningful:
+        return _compact_to_limit(cleaned, limit)
+
+    cta = next(
+        (
+            sentence
+            for sentence in reversed(meaningful)
+            if "?" in sentence
+            or re.search(r"\b(book|schedule|demo|call|reply|respond|available|open to|would you)\b", sentence, re.IGNORECASE)
+        ),
+        None,
+    )
+    core = meaningful[:2]
+    if cta and cta not in core:
+        core.append(f"Next step: {cta}")
+    summary = " ".join(core)
+    if cta and len(summary) > limit:
+        prioritized = " ".join([meaningful[0], f"Next step: {cta}"])
+        if len(prioritized) <= limit:
+            return prioritized
+        cta_only = f"Next step: {cta}"
+        if len(cta_only) <= limit:
+            return cta_only
+    return _compact_to_limit(summary, limit)
+
+
+def build_draft_generation_summary(
+    *,
+    source: str,
+    lead_name: str | None = None,
+    campaign_name: str | None = None,
+    emails_sent: int | None = None,
+    touch_count: int | None = None,
+    inbound_summary: str | None = None,
+    last_outbound_summary: str | None = None,
+    last_inbound_summary: str | None = None,
+    intent: str | None = None,
+    limit: int = SUMMARY_LIMIT,
+) -> str:
+    """Explain, in reviewer-facing language, what context produced a draft."""
+    lead = (lead_name or "this lead").strip()
+    campaign = (campaign_name or "this campaign").strip()
+    parts: list[str] = []
+
+    if source == "inbound_response":
+        parts.append(f"Generated because {lead} replied in {campaign}.")
+        if inbound_summary:
+            parts.append(f"Latest reply: {inbound_summary}")
+    else:
+        stage = "follow-up" if (emails_sent or 0) > 0 or (touch_count or 0) > 0 else "cold outreach"
+        parts.append(f"Generated as {stage} for {lead} in {campaign}.")
+        if last_outbound_summary:
+            parts.append(f"Previous outbound: {last_outbound_summary}")
+
+    if last_inbound_summary and last_inbound_summary != inbound_summary:
+        parts.append(f"Conversation memory: {last_inbound_summary}")
+    if intent:
+        parts.append(f"Detected intent: {str(intent).replace('_', ' ')}.")
+
+    return _compact_to_limit(" ".join(part for part in parts if part), limit)
 
 
 def _table_exists(conn) -> bool:
     try:
+        if using_postgres():
+            row = conn.execute(
+                "SELECT to_regclass(?) AS table_name",
+                ("public.campaign_lead_contexts",),
+            ).fetchone()
+            if not row:
+                return False
+            if isinstance(row, dict):
+                return row.get("table_name") is not None
+            return row["table_name"] is not None
+
         row = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='campaign_lead_contexts'"
         ).fetchone()
         return row is not None
     except Exception:
-        # Aurora/Postgres does not have sqlite_master. If the table is missing,
-        # the write below will fail and be logged as a non-critical context miss.
+        # If existence detection fails, let the caller's read/write attempt log a
+        # non-critical context miss rather than dropping campaign processing.
         return True
 
 

@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useState, useEffect } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { SignInButton, useAuth } from "@clerk/clerk-react";
 import Link from 'next/link'
 import { AppShell } from '@/components/app-shell'
@@ -24,6 +24,7 @@ interface LogEntry {
   status: string
   message: string
   event_id?: string
+  organization_id?: number | null
   timestamp?: string
 }
 
@@ -112,7 +113,13 @@ export default function Home() {
   const selectedOrganization = tenantSelectedOrganization
   const canEditOrganizationTimezone = !!selectedOrganization?.capabilities?.can_manage_organization
   const hasActiveSubscription = !!selectedOrganization?.subscription?.is_active
+  const isPlatformManagementContext = selectedOrganization?.current_user_role === 'system_owner'
+    && !selectedOrganization?.capabilities?.can_run_outreach
   const canRunOutreach = !!selectedOrganization?.capabilities?.can_run_outreach && hasActiveSubscription
+  const visibleMonitorLogs = useMemo(
+    () => monitorLogs.filter(log => !log.organization_id || log.organization_id === effectiveOrganizationId),
+    [monitorLogs, effectiveOrganizationId],
+  )
 
   const authedFetch = useCallback((url: string, init: RequestInit = {}) => {
     return fetchWithAuthRetry(getToken, url, init)
@@ -134,7 +141,7 @@ export default function Home() {
 
   // Start Email Monitor SSE connection
   useEffect(() => {
-    if (!isLoaded || !userId || activeTab !== 'monitor') return
+    if (!isLoaded || !userId || activeTab !== 'monitor' || !effectiveOrganizationId) return
 
     let eventSource: EventSource | null = null
     let cancelled = false
@@ -146,6 +153,7 @@ export default function Home() {
 
         const url = new URL(`${API_BASE}/api/webhooks/stream`)
         url.searchParams.append('token', token)
+        url.searchParams.append('organization_id', String(effectiveOrganizationId))
 
         eventSource = new EventSource(url.toString())
         setIsMonitoring(true)
@@ -172,7 +180,7 @@ export default function Home() {
       eventSource?.close()
       setIsMonitoring(false)
     }
-  }, [isLoaded, userId, activeTab, getToken])
+  }, [isLoaded, userId, activeTab, getToken, effectiveOrganizationId])
 
   useEffect(() => {
     if (isLoaded && userId) {
@@ -189,10 +197,10 @@ export default function Home() {
       const loadDraftCount = async () => {
         try {
           if (!effectiveOrganizationId) return
-          const res = await authedFetch(orgUrl(`${API_BASE}/api/drafts`))
+          const res = await authedFetch(orgUrl(`${API_BASE}/api/drafts/count`))
           if (!res.ok) return
           const data = await res.json()
-          setPendingDraftCount((data.drafts || []).length)
+          setPendingDraftCount(Number(data.count || 0))
         } catch (err) {
           console.error('Error fetching draft count:', err)
         }
@@ -215,10 +223,10 @@ export default function Home() {
 
   const refreshPendingDraftCount = async () => {
     try {
-      const res = await authedFetch(orgUrl(`${API_BASE}/api/drafts`))
+      const res = await authedFetch(orgUrl(`${API_BASE}/api/drafts/count`))
       if (!res.ok) return
       const data = await res.json()
-      setPendingDraftCount((data.drafts || []).length)
+      setPendingDraftCount(Number(data.count || 0))
     } catch (err) {
       console.error('Error fetching draft count:', err)
     }
@@ -465,6 +473,11 @@ export default function Home() {
                   <Link href="/plans" className="ml-2 font-medium underline underline-offset-2">Open plans</Link>
                 </div>
               )}
+              {isPlatformManagementContext && selectedOrganization && (
+                <div className="rounded-lg border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900 dark:border-sky-900/60 dark:bg-sky-950/30 dark:text-sky-200">
+                  You are viewing {selectedOrganization.name} from the platform owner context. Tenant operations are locked here; sign in as an active tenant member to run outreach or send queued emails.
+                </div>
+              )}
               <div className="p-6 bg-white border border-zinc-200 rounded-lg shadow-sm dark:bg-zinc-900 dark:border-zinc-800">
                 <h2 className="text-lg font-semibold mb-4 text-zinc-900 dark:text-zinc-50">Campaign Control</h2>
                 <div className="space-y-4">
@@ -628,13 +641,13 @@ export default function Home() {
                     </>
                   ) : (
                     <>
-                      {monitorLogs.length === 0 && !isMonitoring && (
+                      {visibleMonitorLogs.length === 0 && !isMonitoring && (
                         <p className="text-zinc-600 italic">Connecting to Email Monitor...</p>
                       )}
-                      {monitorLogs.length === 0 && isMonitoring && (
+                      {visibleMonitorLogs.length === 0 && isMonitoring && (
                         <p className="text-zinc-600 italic">Listening for incoming webhooks...</p>
                       )}
-                      {monitorLogs.map((log, i: number) => (
+                      {visibleMonitorLogs.map((log, i: number) => (
                         <div key={i} className={`flex gap-3 ${
                           log.status === 'error' ? 'text-red-400' : 
                           log.status === 'success' ? 'text-emerald-400' : 

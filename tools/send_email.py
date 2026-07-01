@@ -103,20 +103,18 @@ async def send_plain_email(
         if not safety_check.is_safe:
             return SendEmailResult(ok=False, error=f"Safety check failed: {safety_check.violation_reason}")
         
-    if settings.effective_outreach_human_approval and not bypass_human_approval:
+    if settings.effective_outreach_human_approval and not bypass_human_approval and not internal:
+        if organization_id is None:
+            return SendEmailResult(ok=False, error="Organization context is required to save an outreach draft.")
         from utils.db_connection import get_conn
         import datetime
         conn = get_conn()
         try:
             with conn:
-                # Find lead_id
-                if organization_id:
-                    cur = conn.execute(
-                        "SELECT id FROM leads WHERE email = ? AND organization_id = ?",
-                        (email, organization_id),
-                    )
-                else:
-                    cur = conn.execute("SELECT id FROM leads WHERE email = ?", (email,))
+                cur = conn.execute(
+                    "SELECT id FROM leads WHERE email = ? AND organization_id = ?",
+                    (email, organization_id),
+                )
                 row = cur.fetchone()
                 lead_id = row['id'] if row else None
                 
@@ -124,13 +122,13 @@ async def send_plain_email(
                 now_iso = datetime.datetime.utcnow().isoformat() + 'Z'
                 conn.execute(
                     "INSERT INTO email_messages (organization_id, lead_id, direction, subject, body, status, processed, approved, created_at) VALUES (?, ?, 'outbound', ?, ?, 'DRAFT', 1, 0, ?)",
-                    (organization_id or 1, lead_id, subject, body, now_iso)
+                    (organization_id, lead_id, subject, body, now_iso)
                 )
             return SendEmailResult(ok=True, message_id="draft", thread_id="draft")
         except Exception as e:
             return SendEmailResult(ok=False, error=f"Failed to save draft: {e}")
 
-    if error := _validate_config():
+    if error := _validate_config(organization_id=organization_id):
         return SendEmailResult(ok=False, error=error)
     result = _send_with_retry(
         email,
@@ -166,9 +164,9 @@ def _validate_inputs(email: str, subject: str, body: str) -> str | None:
     return None
 
 
-def _validate_config() -> str | None:
+def _validate_config(organization_id: int | None = None) -> str | None:
     if settings.email_provider == "mailbox":
-        return validate_mailbox_config()
+        return validate_mailbox_config(organization_id=organization_id)
     if settings.email_provider == "resend":
         return validate_resend_config()
     if not settings.agent_mail_api:

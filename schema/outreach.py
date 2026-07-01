@@ -1,6 +1,11 @@
 """Pydantic models for outbound email drafts and run results."""
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
+
+
+LLMRoutingMode = Literal["quality_first", "balanced", "cost_optimized"]
 
 
 class CampaignInfo(BaseModel):
@@ -19,6 +24,7 @@ class CampaignInfo(BaseModel):
     auto_approve_drafts: bool = Field(default=False, description="Whether to auto-send outbound outreach drafts for this campaign")
     auto_approve_monitor_replies: bool = Field(default=False, description="Whether to auto-send webhook/email-monitor replies for this campaign")
     max_emails_per_lead: int = Field(default=5, description="Max emails to send per lead in this campaign")
+    llm_routing_mode: LLMRoutingMode | None = Field(default=None, description="Optional campaign-level LLM routing mode override")
 
 
 class CampaignCreate(BaseModel):
@@ -35,6 +41,7 @@ class CampaignCreate(BaseModel):
     auto_approve_drafts: bool = Field(default=False, description="Whether to auto-send outbound outreach drafts")
     auto_approve_monitor_replies: bool = Field(default=False, description="Whether to auto-send webhook/email-monitor replies")
     max_emails_per_lead: int = Field(default=5, description="Max emails to send per lead")
+    llm_routing_mode: LLMRoutingMode | None = Field(default=None, description="Optional campaign-level LLM routing mode override")
 
 
 class CampaignUpdate(BaseModel):
@@ -51,6 +58,7 @@ class CampaignUpdate(BaseModel):
     auto_approve_drafts: bool | None = Field(default=None, description="Whether to auto-send outbound outreach drafts")
     auto_approve_monitor_replies: bool | None = Field(default=None, description="Whether to auto-send webhook/email-monitor replies")
     max_emails_per_lead: int | None = Field(default=None, description="Max emails to send per lead")
+    llm_routing_mode: LLMRoutingMode | None = Field(default=None, description="Optional campaign-level LLM routing mode override")
 
 
 class LeadInfo(BaseModel):
@@ -59,17 +67,21 @@ class LeadInfo(BaseModel):
 
     name: str = Field(description="Lead's full name")
     email: str = Field(description="Lead's email address") 
+    phone_number: str | None = Field(default=None, description="Lead's phone number")
+    linkedin_url: str | None = Field(default=None, description="Lead's LinkedIn URL")
     company: str = Field(description="Lead's company name")
     industry: str = Field(description="Company's industry")
     pain_points: str = Field(description="Known challenges or pain points")
 
 
 class OutreachEmailDraft(BaseModel):
-    """Email generation contract: subject + body only."""
+    """Message generation contract."""
     model_config = ConfigDict(extra="forbid")
 
-    subject: str = Field(description="Email subject")
-    body: str = Field(description="Email body")
+    subject: str = Field(default="", description="Message subject (empty for WhatsApp/LinkedIn)")
+    body: str = Field(description="Message body")
+    channel: str = Field(default="email", description="Channel (email, whatsapp, linkedin)")
+    deep_link_url: str = Field(default="", description="Deep link URL if applicable")
 
 
 class OutreachSendResult(BaseModel):

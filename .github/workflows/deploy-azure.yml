@@ -27,6 +27,7 @@ jobs:
       AZURE_CONTAINER_REGISTRY_NAME: ${{ vars.AZURE_CONTAINER_REGISTRY_NAME }}
       AZURE_CONTAINER_REGISTRY_LOGIN_SERVER: ${{ vars.AZURE_CONTAINER_REGISTRY_LOGIN_SERVER }}
       AZURE_CONTAINER_APP_NAME: ${{ vars.AZURE_CONTAINER_APP_NAME }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
       IMAGE_NAME: shiku-api
     steps:
       - name: Skip when Azure backend deployment config is missing
@@ -53,6 +54,18 @@ jobs:
           docker build -t "$IMAGE" .
           docker push "$IMAGE"
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+      - name: Skip migrations when database secret is missing
+        if: env.AZURE_CLIENT_ID != '' && env.AZURE_TENANT_ID != '' && env.AZURE_SUBSCRIPTION_ID != '' && env.AZURE_RESOURCE_GROUP != '' && env.AZURE_CONTAINER_REGISTRY_NAME != '' && env.AZURE_CONTAINER_REGISTRY_LOGIN_SERVER != '' && env.AZURE_CONTAINER_APP_NAME != '' && env.DATABASE_URL == ''
+        run: echo "::warning::Skipping PostgreSQL migrations. Configure DATABASE_URL as an azure-production environment secret before deploying schema changes."
+
+      - name: Install uv for migrations
+        if: env.AZURE_CLIENT_ID != '' && env.AZURE_TENANT_ID != '' && env.AZURE_SUBSCRIPTION_ID != '' && env.AZURE_RESOURCE_GROUP != '' && env.AZURE_CONTAINER_REGISTRY_NAME != '' && env.AZURE_CONTAINER_REGISTRY_LOGIN_SERVER != '' && env.AZURE_CONTAINER_APP_NAME != '' && env.DATABASE_URL != ''
+        uses: astral-sh/setup-uv@v4
+
+      - name: Run PostgreSQL migrations
+        if: env.AZURE_CLIENT_ID != '' && env.AZURE_TENANT_ID != '' && env.AZURE_SUBSCRIPTION_ID != '' && env.AZURE_RESOURCE_GROUP != '' && env.AZURE_CONTAINER_REGISTRY_NAME != '' && env.AZURE_CONTAINER_REGISTRY_LOGIN_SERVER != '' && env.AZURE_CONTAINER_APP_NAME != '' && env.DATABASE_URL != ''
+        run: uv run --with "psycopg[binary]>=3.2.0" scripts/apply_postgres_migrations.py
 
       - name: Update container app
         if: env.AZURE_CLIENT_ID != '' && env.AZURE_TENANT_ID != '' && env.AZURE_SUBSCRIPTION_ID != '' && env.AZURE_RESOURCE_GROUP != '' && env.AZURE_CONTAINER_REGISTRY_NAME != '' && env.AZURE_CONTAINER_REGISTRY_LOGIN_SERVER != '' && env.AZURE_CONTAINER_APP_NAME != ''

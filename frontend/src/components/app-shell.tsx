@@ -2,8 +2,9 @@
 
 import { ClerkLoaded, UserButton } from '@clerk/clerk-react'
 import Link from 'next/link'
+import { useState } from 'react'
 import { PendingDraftsLink } from '@/components/pending-drafts-link'
-import { useTenantScope } from '@/components/tenant-scope'
+import { OrganizationCapabilities, useTenantScope } from '@/components/tenant-scope'
 
 type AppShellSection =
   | 'dashboard'
@@ -14,6 +15,7 @@ type AppShellSection =
   | 'plans'
   | 'usage'
   | 'mailboxes'
+  | 'llm-credentials'
   | 'organization'
   | 'audit'
 
@@ -22,17 +24,20 @@ interface AppShellProps {
   children: React.ReactNode
 }
 
-const navItems: Array<{ href: string; label: string; key: AppShellSection }> = [
+type CapabilityKey = keyof OrganizationCapabilities
+
+const navItems: Array<{ href: string; label: string; key: AppShellSection; capability?: CapabilityKey | CapabilityKey[] }> = [
   { href: '/', label: 'Dashboard', key: 'dashboard' },
-  { href: '/campaigns', label: 'Campaigns', key: 'campaigns' },
-  { href: '/leads', label: 'Leads', key: 'leads' },
-  { href: '/drafts', label: 'Drafts', key: 'drafts' },
-  { href: '/staff', label: 'Staff', key: 'staff' },
-  { href: '/plans', label: 'Plans', key: 'plans' },
+  { href: '/campaigns', label: 'Campaigns', key: 'campaigns', capability: 'can_manage_campaigns' },
+  { href: '/leads', label: 'Leads', key: 'leads', capability: 'can_manage_leads' },
+  { href: '/drafts', label: 'Drafts', key: 'drafts', capability: 'can_review_drafts' },
+  { href: '/staff', label: 'Staff', key: 'staff', capability: 'can_manage_staff' },
+  { href: '/plans', label: 'Plans', key: 'plans', capability: ['can_manage_subscription_plans', 'can_choose_subscription_plan'] },
   { href: '/usage', label: 'Usage', key: 'usage' },
-  { href: '/mailboxes', label: 'Mailboxes', key: 'mailboxes' },
-  { href: '/organization', label: 'Organization', key: 'organization' },
-  { href: '/audit', label: 'Compliance', key: 'audit' },
+  { href: '/mailboxes', label: 'Mailboxes', key: 'mailboxes', capability: 'can_manage_mailboxes' },
+  { href: '/llm-credentials', label: 'LLM Keys', key: 'llm-credentials', capability: 'can_manage_llm_credentials' },
+  { href: '/organization', label: 'Organization', key: 'organization', capability: ['can_manage_organization', 'can_manage_users', 'can_create_organizations'] },
+  { href: '/audit', label: 'Compliance', key: 'audit', capability: 'can_view_compliance' },
 ]
 
 function navClass(active: boolean) {
@@ -42,7 +47,16 @@ function navClass(active: boolean) {
 }
 
 export function AppShell({ active, children }: AppShellProps) {
-  const { organizations, selectedOrganizationId, selectedOrganization, setSelectedOrganization } = useTenantScope()
+  const { loading, organizations, selectedOrganizationId, selectedOrganization, setSelectedOrganization } = useTenantScope()
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const capabilities = selectedOrganization?.capabilities
+  const isLoadingTenantScope = loading && !selectedOrganization
+  const visibleNavItems = isLoadingTenantScope ? [] : navItems.filter(item => {
+    if (!item.capability) return true
+    if (!capabilities) return false
+    const required = Array.isArray(item.capability) ? item.capability : [item.capability]
+    return required.some(capability => Boolean(capabilities[capability]))
+  })
 
   return (
     <div className="min-h-screen bg-zinc-50 text-zinc-950 dark:bg-zinc-950 dark:text-zinc-50">
@@ -54,63 +68,97 @@ export function AppShell({ active, children }: AppShellProps) {
           </div>
         </div>
         <nav className="flex-1 space-y-1 p-3">
-          {navItems.map(item => (
-            item.key === 'drafts' ? (
-              <PendingDraftsLink key={item.key} active={active === item.key} className={navClass(active === item.key)} />
-            ) : (
-              <Link key={item.key} href={item.href} className={navClass(active === item.key)}>
-                <span>{item.label}</span>
-              </Link>
-            )
-          ))}
+          {isLoadingTenantScope ? (
+            <div className="space-y-2 px-3 py-2">
+              <div className="h-4 w-32 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
+              <div className="h-4 w-24 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
+              <div className="h-4 w-28 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
+            </div>
+          ) : (
+            visibleNavItems.map(item => (
+              item.key === 'drafts' ? (
+                <PendingDraftsLink key={item.key} active={active === item.key} className={navClass(active === item.key)} />
+              ) : (
+                <Link key={item.key} href={item.href} className={navClass(active === item.key)}>
+                  <span>{item.label}</span>
+                </Link>
+              )
+            ))
+          )}
         </nav>
       </aside>
 
       <div className="lg:pl-64">
-        <header className="sticky top-0 z-30 flex min-h-16 items-center justify-between border-b border-zinc-200 bg-white/90 px-4 backdrop-blur dark:border-zinc-800 dark:bg-zinc-900/90 sm:px-6 lg:px-8">
-          <div className="min-w-0">
-            <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Shiku SDR</div>
-            <div className="hidden text-xs text-zinc-500 sm:block">Campaigns, approvals, scheduling, and compliance</div>
-          </div>
-          <nav className="hidden items-center gap-3 md:flex lg:hidden">
-            {navItems.slice(0, 5).map(item => (
-              item.key === 'drafts' ? (
-                <PendingDraftsLink key={item.key} active={active === item.key} />
-              ) : (
-                <Link
-                  key={item.key}
-                  href={item.href}
-                  className={active === item.key ? 'text-sm font-medium text-zinc-900 dark:text-zinc-100' : 'text-sm text-zinc-500'}
-                >
-                  {item.label}
-                </Link>
-              )
-            ))}
-          </nav>
-          <div className="flex items-center gap-3">
-            {organizations.length > 0 && (
-              <select
-                value={selectedOrganizationId || ''}
-                onChange={(event) => setSelectedOrganization(Number(event.target.value))}
-                className="max-w-48 rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
-                aria-label="Active organization"
+        <header className="sticky top-0 z-30 border-b border-zinc-200 bg-white/90 backdrop-blur dark:border-zinc-800 dark:bg-zinc-900/90">
+          <div className="flex min-h-16 items-center justify-between gap-3 px-4 sm:px-6 lg:px-8">
+            <div className="flex min-w-0 items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setMobileMenuOpen(open => !open)}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-zinc-300 text-zinc-700 dark:border-zinc-700 dark:text-zinc-200 lg:hidden"
+                aria-label="Toggle navigation"
+                aria-expanded={mobileMenuOpen}
               >
-                {organizations.map(org => (
-                  <option key={org.id} value={org.id}>
-                    {org.name} · {org.current_user_role}
-                  </option>
-                ))}
-              </select>
-            )}
-            {selectedOrganization && (
-              <span className="hidden rounded-md border border-zinc-200 px-2 py-1 text-xs text-zinc-500 dark:border-zinc-700 md:inline">
-                {selectedOrganization.subscription?.plan?.name || 'No plan'} · {selectedOrganization.subscription?.effective_status || 'NONE'}
-              </span>
-            )}
-            <ClerkLoaded>
-              <UserButton />
-            </ClerkLoaded>
+                <span className="text-lg leading-none">{mobileMenuOpen ? '×' : '☰'}</span>
+              </button>
+              <div className="min-w-0">
+                <div className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">Shiku SDR</div>
+                <div className="hidden truncate text-xs text-zinc-500 sm:block">Campaigns, approvals, scheduling, and compliance</div>
+              </div>
+            </div>
+            <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+              {isLoadingTenantScope ? (
+                <div className="h-8 w-32 animate-pulse rounded-md bg-zinc-200 dark:bg-zinc-800 sm:w-48" />
+              ) : organizations.length > 0 && (
+                <select
+                  value={selectedOrganizationId || ''}
+                  onChange={(event) => setSelectedOrganization(Number(event.target.value))}
+                  className="max-w-32 rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 sm:max-w-48"
+                  aria-label="Active organization"
+                >
+                  {organizations.map(org => (
+                    <option key={org.id} value={org.id}>
+                      {org.name} · {org.current_user_role}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {selectedOrganization && (
+                <span className="hidden rounded-md border border-zinc-200 px-2 py-1 text-xs text-zinc-500 dark:border-zinc-700 md:inline">
+                  {selectedOrganization.subscription?.plan?.name || 'No plan'} · {selectedOrganization.subscription?.effective_status || 'NONE'}
+                </span>
+              )}
+              <ClerkLoaded>
+                <UserButton />
+              </ClerkLoaded>
+            </div>
           </div>
+          {mobileMenuOpen && (
+            <nav className="grid gap-1 border-t border-zinc-200 p-3 dark:border-zinc-800 lg:hidden">
+              {isLoadingTenantScope ? (
+                <div className="space-y-2 px-3 py-2">
+                  <div className="h-4 w-32 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
+                  <div className="h-4 w-24 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
+                  <div className="h-4 w-28 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
+                </div>
+              ) : (
+                visibleNavItems.map(item => (
+                  item.key === 'drafts' ? (
+                    <PendingDraftsLink key={item.key} active={active === item.key} className={navClass(active === item.key)} />
+                  ) : (
+                    <Link
+                      key={item.key}
+                      href={item.href}
+                      onClick={() => setMobileMenuOpen(false)}
+                      className={navClass(active === item.key)}
+                    >
+                      <span>{item.label}</span>
+                    </Link>
+                  )
+                ))
+              )}
+            </nav>
+          )}
         </header>
         {children}
       </div>

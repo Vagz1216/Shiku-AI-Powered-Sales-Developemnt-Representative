@@ -36,6 +36,7 @@ _POSTGRES_ID_TABLES = {
     "mailbox_connections",
     "meetings",
     "organization_billing_periods",
+    "organization_llm_credentials",
     "organization_subscriptions",
     "organizations",
     "outbound_webhooks",
@@ -223,9 +224,11 @@ class PostgresConnection:
     """Small psycopg wrapper that mirrors the sqlite3 connection surface used by services."""
 
     def __init__(self, database_url: str):
+        from config.settings import settings
+
         self._pool = _get_postgres_pool(database_url)
         started = time.perf_counter()
-        self._conn = self._pool.getconn()
+        self._conn = self._pool.getconn(timeout=settings.postgres_pool_timeout_seconds)
         duration_ms = round((time.perf_counter() - started) * 1000, 2)
         if duration_ms > 1000:
             logger.warning("Slow PostgreSQL pool checkout: %.2fms", duration_ms)
@@ -237,6 +240,15 @@ class PostgresConnection:
             cur = self._conn.execute(pg_sql, params)
             return PostgresCursor(cur, auto_returning_id=auto_returning_id)
         except Exception as e:
+            if _is_stale_postgres_connection_error(e):
+                logger.warning("PostgreSQL connection was stale; reconnecting and retrying once")
+                self._replace_conn()
+                try:
+                    cur = self._conn.execute(pg_sql, params)
+                    return PostgresCursor(cur, auto_returning_id=auto_returning_id)
+                except Exception as retry_error:
+                    logger.error(f"PostgreSQL SQL error after reconnect: {retry_error}\nSQL: {pg_sql}")
+                    raise
             logger.error(f"PostgreSQL SQL error: {e}\nSQL: {pg_sql}")
             raise
 
@@ -252,6 +264,14 @@ class PostgresConnection:
             return
         self._pool.putconn(self._conn)
         self._closed = True
+
+    def _replace_conn(self):
+        try:
+            self._pool.putconn(self._conn)
+        except Exception:
+            pass
+        self._conn = self._pool.getconn()
+        self._closed = False
 
     def __enter__(self):
         return self
@@ -271,6 +291,20 @@ class PostgresConnection:
             self.close()
         except Exception:
             pass
+
+
+def _is_stale_postgres_connection_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return any(
+        marker in message
+        for marker in (
+            "ssl connection has been closed unexpectedly",
+            "server closed the connection unexpectedly",
+            "connection is closed",
+            "consuming input failed",
+            "connection bad",
+        )
+    )
 
 
 class PostgresCursor:
@@ -424,6 +458,13 @@ def _ensure_campaign_approval_columns(conn: sqlite3.Connection):
                 "ADD COLUMN auto_approve_monitor_replies INTEGER NOT NULL DEFAULT 0 "
                 "CHECK(auto_approve_monitor_replies IN (0,1))"
             )
+        if "llm_routing_mode" not in columns:
+            logger.info("Adding campaigns.llm_routing_mode column...")
+            conn.execute(
+                "ALTER TABLE campaigns "
+                "ADD COLUMN llm_routing_mode TEXT "
+                "CHECK(llm_routing_mode IS NULL OR llm_routing_mode IN ('quality_first','balanced','cost_optimized'))"
+            )
     except Exception as e:
         logger.warning(f"Campaign approval-column migration skipped: {e}")
 
@@ -462,6 +503,14 @@ def _ensure_llm_usage_table(conn: sqlite3.Connection):
         _add_column_if_missing(conn, "llm_usage_events", "user_id", "INTEGER")
         _add_column_if_missing(conn, "llm_usage_events", "ai_usage_action_id", "INTEGER")
         _add_column_if_missing(conn, "llm_usage_events", "pricing_version", "TEXT")
+        _add_column_if_missing(conn, "llm_usage_events", "routing_mode", "TEXT")
+        _add_column_if_missing(
+            conn,
+            "llm_usage_events",
+            "billing_source",
+            "TEXT NOT NULL DEFAULT 'platform' CHECK(billing_source IN ('platform','organization'))",
+        )
+        _add_column_if_missing(conn, "llm_usage_events", "provider_credential_id", "INTEGER")
         conn.executescript("""
             CREATE INDEX IF NOT EXISTS idx_llm_usage_org_created_at ON llm_usage_events(organization_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_llm_usage_action ON llm_usage_events(ai_usage_action_id);
@@ -475,6 +524,8 @@ def _ensure_usage_metering_tables(conn: sqlite3.Connection):
     """Create product usage and cost-allocation ledgers for local databases."""
     try:
         _add_column_if_missing(conn, "subscription_plans", "max_monthly_ai_credits", "INTEGER")
+        _add_column_if_missing(conn, "subscription_plans", "currency_code", "TEXT NOT NULL DEFAULT 'USD'")
+        _add_column_if_missing(conn, "subscription_plans", "market_code", "TEXT NOT NULL DEFAULT 'GLOBAL'")
         _add_column_if_missing(
             conn,
             "subscription_plans",
@@ -482,6 +533,37 @@ def _ensure_usage_metering_tables(conn: sqlite3.Connection):
             "INTEGER NOT NULL DEFAULT 0 CHECK(overage_allowed IN (0,1))",
         )
         _add_column_if_missing(conn, "subscription_plans", "overage_price_cents_per_ai_credit", "INTEGER")
+        _add_column_if_missing(
+            conn,
+            "subscription_plans",
+            "allow_byok",
+            "INTEGER NOT NULL DEFAULT 0 CHECK(allow_byok IN (0,1))",
+        )
+        _add_column_if_missing(
+            conn,
+            "subscription_plans",
+            "byok_provider_mode",
+            "TEXT NOT NULL DEFAULT 'platform_first' CHECK(byok_provider_mode IN ('platform_first','organization_first','organization_only'))",
+        )
+        _add_column_if_missing(conn, "subscription_plans", "max_llm_credentials", "INTEGER")
+        _add_column_if_missing(
+            conn,
+            "subscription_plans",
+            "allowed_llm_routing_modes",
+            "TEXT NOT NULL DEFAULT 'cost_optimized,balanced,quality_first'",
+        )
+        _add_column_if_missing(
+            conn,
+            "subscription_plans",
+            "default_llm_routing_mode",
+            "TEXT NOT NULL DEFAULT 'balanced' CHECK(default_llm_routing_mode IN ('cost_optimized','balanced','quality_first'))",
+        )
+        _add_column_if_missing(
+            conn,
+            "subscription_plans",
+            "trial_allowed_llm_routing_modes",
+            "TEXT NOT NULL DEFAULT 'cost_optimized'",
+        )
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS organization_billing_periods (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -552,12 +634,36 @@ def _ensure_usage_metering_tables(conn: sqlite3.Connection):
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
+            CREATE TABLE IF NOT EXISTS organization_llm_credentials (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                organization_id INTEGER NOT NULL,
+                provider TEXT NOT NULL CHECK(provider IN ('openai','azure_openai','gemini','groq','cerebras','openrouter')),
+                label TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK(status IN ('ACTIVE','DISABLED')),
+                api_key_secret TEXT NOT NULL,
+                base_url TEXT,
+                azure_endpoint TEXT,
+                azure_deployment TEXT,
+                azure_api_version TEXT,
+                default_model TEXT,
+                created_by_user_id INTEGER,
+                last_used_at TEXT,
+                last_tested_at TEXT,
+                last_error TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT,
+                FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+                FOREIGN KEY (created_by_user_id) REFERENCES app_users(id) ON DELETE SET NULL,
+                UNIQUE (organization_id, provider, label)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_billing_periods_org ON organization_billing_periods(organization_id, period_start, period_end);
             CREATE INDEX IF NOT EXISTS idx_ai_usage_org_created ON ai_usage_actions(organization_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_ai_usage_period ON ai_usage_actions(organization_id, billing_period_start, billing_period_end);
             CREATE INDEX IF NOT EXISTS idx_ai_usage_user ON ai_usage_actions(user_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_platform_usage_org_created ON platform_usage_events(organization_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_platform_cost_period ON platform_cost_allocations(period_start, period_end);
+            CREATE INDEX IF NOT EXISTS idx_org_llm_credentials_org_status ON organization_llm_credentials(organization_id, status);
         """)
     except Exception as e:
         logger.warning(f"Usage metering migration skipped: {e}")
@@ -603,12 +709,20 @@ def _ensure_tenant_tables(conn: sqlite3.Connection):
                 slug TEXT NOT NULL UNIQUE,
                 description TEXT,
                 monthly_price_cents INTEGER NOT NULL DEFAULT 0,
+                currency_code TEXT NOT NULL DEFAULT 'USD',
+                market_code TEXT NOT NULL DEFAULT 'GLOBAL',
                 trial_days INTEGER NOT NULL DEFAULT 14,
                 max_users INTEGER,
                 max_campaigns INTEGER,
                 max_leads INTEGER,
                 max_monthly_emails INTEGER,
                 max_monthly_ai_tokens INTEGER,
+                allow_byok INTEGER NOT NULL DEFAULT 0 CHECK(allow_byok IN (0,1)),
+                byok_provider_mode TEXT NOT NULL DEFAULT 'platform_first' CHECK(byok_provider_mode IN ('platform_first','organization_first','organization_only')),
+                max_llm_credentials INTEGER,
+                allowed_llm_routing_modes TEXT NOT NULL DEFAULT 'cost_optimized,balanced,quality_first',
+                default_llm_routing_mode TEXT NOT NULL DEFAULT 'balanced' CHECK(default_llm_routing_mode IN ('cost_optimized','balanced','quality_first')),
+                trial_allowed_llm_routing_modes TEXT NOT NULL DEFAULT 'cost_optimized',
                 active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT
@@ -665,6 +779,7 @@ def _ensure_tenant_tables(conn: sqlite3.Connection):
             CREATE INDEX IF NOT EXISTS idx_app_users_email ON app_users(email);
             CREATE INDEX IF NOT EXISTS idx_organization_users_user_id ON organization_users(user_id);
             CREATE INDEX IF NOT EXISTS idx_subscription_plans_active ON subscription_plans(active);
+            CREATE INDEX IF NOT EXISTS idx_subscription_plans_market_currency ON subscription_plans(market_code, currency_code, active);
             CREATE INDEX IF NOT EXISTS idx_organization_subscriptions_plan ON organization_subscriptions(plan_id);
             CREATE INDEX IF NOT EXISTS idx_organization_subscriptions_status ON organization_subscriptions(status);
             CREATE INDEX IF NOT EXISTS idx_mailbox_connections_org ON mailbox_connections(organization_id);
@@ -689,9 +804,14 @@ def _ensure_core_tenant_columns(conn: sqlite3.Connection):
 
         conn.executescript("""
             CREATE INDEX IF NOT EXISTS idx_campaigns_org ON campaigns(organization_id);
+            CREATE INDEX IF NOT EXISTS idx_campaigns_org_status ON campaigns(organization_id, status);
             CREATE INDEX IF NOT EXISTS idx_leads_org_email ON leads(organization_id, email);
             CREATE INDEX IF NOT EXISTS idx_staff_org_email ON staff(organization_id, email);
             CREATE INDEX IF NOT EXISTS idx_email_messages_org ON email_messages(organization_id);
+            CREATE INDEX IF NOT EXISTS idx_email_messages_org_status_review
+                ON email_messages(organization_id, status, approved, direction, created_at);
+            CREATE INDEX IF NOT EXISTS idx_email_messages_org_campaign_created
+                ON email_messages(organization_id, campaign_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_events_org ON events(organization_id, created_at);
         """)
     except Exception as e:
@@ -719,6 +839,9 @@ def _ensure_outreach_operations_tables(conn: sqlite3.Connection):
         _add_column_if_missing(conn, "email_messages", "external_thread_id", "TEXT")
 
         conn.executescript("""
+            CREATE INDEX IF NOT EXISTS idx_email_messages_inbound_external
+                ON email_messages(organization_id, direction, external_message_id);
+
             CREATE TABLE IF NOT EXISTS campaign_sequence_steps (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 campaign_id INTEGER NOT NULL,
@@ -728,6 +851,17 @@ def _ensure_outreach_operations_tables(conn: sqlite3.Connection):
                 body_template TEXT,
                 active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE,
+                UNIQUE (campaign_id, step_number)
+            );
+            
+            CREATE TABLE IF NOT EXISTS campaign_sequences (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                campaign_id INTEGER NOT NULL,
+                step_number INTEGER NOT NULL,
+                channel TEXT NOT NULL DEFAULT 'email' CHECK(channel IN ('email','linkedin','whatsapp')),
+                delay_days INTEGER NOT NULL DEFAULT 3,
+                prompt_context TEXT,
                 FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE,
                 UNIQUE (campaign_id, step_number)
             );

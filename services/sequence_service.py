@@ -154,7 +154,7 @@ def replace_sequence_steps(campaign_id: int, steps: list[dict[str, Any]], organi
                         step["delay_days"],
                         step["subject_template"],
                         step["body_template"],
-                        step["active"],
+                        1 if step["active"] else 0,
                     ),
                 )
             conn.execute(

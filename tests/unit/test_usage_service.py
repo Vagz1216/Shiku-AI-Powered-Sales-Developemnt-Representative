@@ -137,6 +137,18 @@ def test_record_llm_usage_stores_integer_fallback_flag(monkeypatch):
         fallback_triggered=True,
         attempt_count=2,
         tool_call_count=0,
+        routing_mode="balanced",
     )
 
-    assert fake.params[0][17] == 1
+    assert fake.params[0][17] == "balanced"
+    assert fake.params[0][18] == 1
+
+
+def test_usage_summary_filters_by_routing_mode(monkeypatch):
+    fake = _FakeConn()
+    monkeypatch.setattr(usage_service, "get_conn", lambda: fake)
+
+    usage_service.get_usage_summary(organization_id=1, routing_mode="cost_optimized")
+
+    assert "routing_mode = ?" in fake.queries[0]
+    assert fake.params[0] == (1, "cost_optimized")

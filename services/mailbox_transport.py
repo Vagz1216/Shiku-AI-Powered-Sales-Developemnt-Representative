@@ -15,6 +15,7 @@ from typing import Any
 
 from config import settings
 from schema import SendEmailResult
+from services import mailbox_oauth_service
 from services.resend_email import send_resend_email, send_resend_reply
 from services.tenant_service import decrypt_secret
 from utils.db_connection import dict_from_row, get_conn
@@ -22,9 +23,12 @@ from utils.db_connection import dict_from_row, get_conn
 logger = logging.getLogger(__name__)
 
 
-def validate_mailbox_config(mailbox_id: int | None = None) -> str | None:
+def validate_mailbox_config(
+    mailbox_id: int | None = None,
+    organization_id: int | None = None,
+) -> str | None:
     try:
-        _resolve_mailbox(mailbox_id)
+        _resolve_mailbox(mailbox_id, organization_id=organization_id)
         return None
     except Exception as exc:
         return str(exc)
@@ -58,6 +62,17 @@ def send_mailbox_email(
                 api_key=decrypt_secret(mailbox.get("resend_api_key_secret")),
                 from_email=mailbox.get("resend_from_email") or mailbox.get("email_address"),
                 reply_to=mailbox.get("resend_reply_to"),
+            )
+        if mailbox["provider"] in {"gmail", "microsoft"}:
+            return mailbox_oauth_service.send_oauth_email(
+                mailbox,
+                to_email=email,
+                to_name=name,
+                subject=subject,
+                body=body,
+                html_body=html_body,
+                attachments=attachments,
+                headers=headers,
             )
         message_id = _send_via_smtp(
             mailbox,
@@ -127,17 +142,28 @@ async def sync_unread_mailbox(
     """Fetch unread IMAP messages and pass them into the existing email monitor."""
     from email_monitor.monitor import email_monitor
 
-    mailbox = _resolve_mailbox(mailbox_id=mailbox_id, organization_id=organization_id, provider="smtp_imap")
+    mailbox = _resolve_mailbox(mailbox_id=mailbox_id, organization_id=organization_id, provider=None)
+    if mailbox["provider"] == "resend":
+        raise ValueError("Resend inbound processing uses webhooks, not mailbox polling")
     logger.info(
-        "Starting IMAP mailbox sync",
+        "Starting mailbox sync",
         extra={
             "kind": "mailbox_sync_start",
             "component": "mailbox",
-            "data": {"organization_id": organization_id, "mailbox_id": mailbox_id, "limit": limit},
+            "data": {"organization_id": organization_id, "mailbox_id": mailbox_id, "provider": mailbox["provider"], "limit": limit},
         },
     )
     if callback:
-        await callback("info", f"Checking unread IMAP messages for mailbox {mailbox_id}")
+        await callback("info", f"Checking unread {mailbox['provider']} messages for mailbox {mailbox_id}")
+    if mailbox["provider"] in {"gmail", "microsoft"}:
+        return await _sync_unread_oauth_mailbox(
+            mailbox,
+            organization_id=organization_id,
+            mailbox_id=mailbox_id,
+            limit=limit,
+            mark_seen=mark_seen,
+            callback=callback,
+        )
     client = _imap_client(mailbox)
     processed: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
@@ -148,7 +174,7 @@ async def sync_unread_mailbox(
         status, data = client.uid("SEARCH", None, "UNSEEN")
         if status != "OK":
             raise RuntimeError("IMAP search failed")
-        uids = (data[0] or b"").split()[:limit]
+        uids = _latest_unseen_uids(data, limit)
         logger.info(
             "IMAP unread search completed",
             extra={
@@ -167,7 +193,38 @@ async def sync_unread_mailbox(
                     raise RuntimeError("IMAP fetch failed")
                 raw_message = _extract_fetch_bytes(fetched)
                 message_payload = _normalize_imap_message(raw_message, mailbox, uid_text)
+                message_payload["organization_id"] = organization_id
+                message_payload["mailbox_id"] = mailbox_id
                 sender_email = _extract_email_address(message_payload["from"])
+                if _inbound_message_already_recorded(
+                    organization_id=organization_id,
+                    external_message_id=message_payload.get("message_id"),
+                ):
+                    logger.info(
+                        "Skipping already-processed inbound IMAP message",
+                        extra={
+                            "kind": "mailbox_sync_deduped",
+                            "component": "mailbox",
+                            "data": {
+                                "organization_id": organization_id,
+                                "mailbox_id": mailbox_id,
+                                "uid": uid_text,
+                                "sender_email": sender_email,
+                                "external_message_id": message_payload.get("message_id"),
+                            },
+                        },
+                    )
+                    if mark_seen:
+                        client.uid("STORE", uid, "+FLAGS", r"(\Seen)")
+                    skipped.append(
+                        {
+                            "uid": uid_text,
+                            "from": message_payload["from"],
+                            "subject": message_payload["subject"],
+                            "reason": "message already processed",
+                        }
+                    )
+                    continue
                 route = _route_inbound_sender(sender_email, organization_id)
                 if not route["process"]:
                     logger.info(
@@ -290,19 +347,225 @@ async def sync_unread_mailbox(
     }
 
 
+async def _sync_unread_oauth_mailbox(
+    mailbox: dict[str, Any],
+    *,
+    organization_id: int,
+    mailbox_id: int,
+    limit: int,
+    mark_seen: bool,
+    callback=None,
+) -> dict[str, Any]:
+    from email_monitor.monitor import email_monitor
+
+    messages = mailbox_oauth_service.fetch_unread_messages(mailbox, limit=limit)
+    processed: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    logger.info(
+        "OAuth unread search completed",
+        extra={
+            "kind": "mailbox_sync_unread_found",
+            "component": "mailbox",
+            "data": {
+                "organization_id": organization_id,
+                "mailbox_id": mailbox_id,
+                "provider": mailbox["provider"],
+                "count": len(messages),
+            },
+        },
+    )
+    if callback:
+        await callback("info", f"Found {len(messages)} unread {mailbox['provider']} message(s)")
+
+    for item in messages:
+        provider_message_id = str(item.get("provider_message_id") or "")
+        try:
+            if mailbox["provider"] == "gmail":
+                message_payload = _normalize_imap_message(item["raw"], mailbox, f"gmail:{provider_message_id}")
+                message_payload["id"] = f"gmail:{provider_message_id}"
+                message_payload["provider"] = "gmail"
+                if item.get("thread_id"):
+                    message_payload["thread_id"] = item["thread_id"]
+            else:
+                message_payload = _normalize_microsoft_message(item["message"], mailbox)
+
+            message_payload["organization_id"] = organization_id
+            message_payload["mailbox_id"] = mailbox_id
+            sender_email = _extract_email_address(message_payload["from"])
+            if _inbound_message_already_recorded(
+                organization_id=organization_id,
+                external_message_id=message_payload.get("message_id"),
+            ):
+                if mark_seen:
+                    mailbox_oauth_service.mark_message_seen(mailbox, provider_message_id)
+                skipped.append(
+                    {
+                        "uid": provider_message_id,
+                        "from": message_payload["from"],
+                        "subject": message_payload["subject"],
+                        "reason": "message already processed",
+                    }
+                )
+                continue
+            route = _route_inbound_sender(sender_email, organization_id)
+            if not route["process"]:
+                logger.info(
+                    "Skipping inbound OAuth message",
+                    extra={
+                        "kind": "mailbox_sync_skipped",
+                        "component": "mailbox",
+                        "data": {
+                            "organization_id": organization_id,
+                            "mailbox_id": mailbox_id,
+                            "provider": mailbox["provider"],
+                            "provider_message_id": provider_message_id,
+                            "sender_email": sender_email,
+                            "reason": route["reason"],
+                        },
+                    },
+                )
+                if callback:
+                    await callback("warning", f"Skipping {mailbox['provider']} message from {sender_email}: {route['reason']}")
+                skipped.append(
+                    {
+                        "uid": provider_message_id,
+                        "from": message_payload["from"],
+                        "subject": message_payload["subject"],
+                        "reason": route["reason"],
+                    }
+                )
+                continue
+
+            message_payload["campaign_id"] = route["campaign_id"]
+            result = await email_monitor.process_incoming_email(message_payload, callback=callback)
+            processed.append(
+                {
+                    "uid": provider_message_id,
+                    "from": message_payload["from"],
+                    "subject": message_payload["subject"],
+                    "action": result.action_taken,
+                    "success": result.success,
+                    "error": result.error,
+                }
+            )
+            if mark_seen:
+                mailbox_oauth_service.mark_message_seen(mailbox, provider_message_id)
+        except Exception as exc:
+            logger.exception(
+                "Failed to process OAuth mailbox message",
+                extra={
+                    "kind": "mailbox_sync_error",
+                    "component": "mailbox",
+                    "data": {
+                        "organization_id": organization_id,
+                        "mailbox_id": mailbox_id,
+                        "provider": mailbox["provider"],
+                        "provider_message_id": provider_message_id,
+                        "error": str(exc),
+                    },
+                },
+            )
+            if callback:
+                await callback("error", f"Failed to process {mailbox['provider']} message {provider_message_id}: {exc}")
+            errors.append({"uid": provider_message_id, "error": str(exc)})
+
+    _update_mailbox_sync_state(mailbox_id, None if not errors else f"{len(errors)} sync error(s)")
+    logger.info(
+        "OAuth mailbox sync completed",
+        extra={
+            "kind": "mailbox_sync_complete",
+            "component": "mailbox",
+            "data": {
+                "organization_id": organization_id,
+                "mailbox_id": mailbox_id,
+                "provider": mailbox["provider"],
+                "processed": len(processed),
+                "skipped": len(skipped),
+                "errors": len(errors),
+            },
+        },
+    )
+    if callback:
+        await callback("success", f"Mailbox sync complete: {len(processed)} processed, {len(skipped)} skipped, {len(errors)} errors")
+    return {
+        "mailbox_id": mailbox_id,
+        "checked": len(processed) + len(skipped) + len(errors),
+        "processed": processed,
+        "skipped": skipped,
+        "errors": errors,
+    }
+
+
+def list_connected_imap_mailboxes(
+    *,
+    organization_id: int | None = None,
+    mailbox_id: int | None = None,
+) -> list[dict[str, Any]]:
+    """Return connected SMTP/IMAP mailboxes eligible for unread-message polling."""
+    params: list[Any] = []
+    where = ["status = 'CONNECTED'", "provider IN ('smtp_imap', 'gmail', 'microsoft')"]
+    if organization_id is not None:
+        where.append("organization_id = ?")
+        params.append(organization_id)
+    if mailbox_id is not None:
+        where.append("id = ?")
+        params.append(mailbox_id)
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, organization_id, provider, email_address, display_name "
+            f"FROM mailbox_connections WHERE {' AND '.join(where)} ORDER BY id ASC",
+            tuple(params),
+        ).fetchall()
+    return [dict_from_row(row) for row in rows]
+
+
+def _latest_unseen_uids(data: list[bytes] | tuple[bytes, ...], limit: int) -> list[bytes]:
+    """Return newest unread IMAP UIDs first.
+
+    IMAP SEARCH usually returns UIDs in ascending order. Mailbox UIs generally
+    show newest first, so reverse before applying the limit.
+    """
+    if not data:
+        return []
+    return list(reversed((data[0] or b"").split()))[:limit]
+
+
+def _inbound_message_already_recorded(
+    *,
+    organization_id: int,
+    external_message_id: str | None,
+) -> bool:
+    if not external_message_id:
+        return False
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT id FROM email_messages "
+            "WHERE organization_id = ? AND direction = 'inbound' AND external_message_id = ? "
+            "LIMIT 1",
+            (organization_id, external_message_id),
+        ).fetchone()
+    return row is not None
+
+
 def _resolve_mailbox(
     mailbox_id: int | None = None,
     organization_id: int | None = None,
     provider: str | None = None,
 ) -> dict[str, Any]:
-    resolved_id = mailbox_id or settings.default_mailbox_id
+    # DEFAULT_MAILBOX_ID is a platform-level fallback for single-mailbox setups.
+    # In tenant-scoped sends, selecting it before organization filtering can make
+    # org 2 look for org 1's mailbox id and falsely report no connected mailbox.
+    resolved_id = mailbox_id if mailbox_id is not None else (
+        settings.default_mailbox_id if organization_id is None else None
+    )
     params: list[Any] = []
     where = ["status = 'CONNECTED'"]
     if provider:
         where.append("provider = ?")
         params.append(provider)
     else:
-        where.append("provider IN ('smtp_imap', 'resend')")
+        where.append("provider IN ('smtp_imap', 'resend', 'gmail', 'microsoft')")
     if resolved_id:
         where.append("id = ?")
         params.append(resolved_id)
@@ -310,13 +573,24 @@ def _resolve_mailbox(
         where.append("organization_id = ?")
         params.append(organization_id)
     with get_conn() as conn:
-        row = conn.execute(
-            f"SELECT * FROM mailbox_connections WHERE {' AND '.join(where)} ORDER BY id DESC LIMIT 1",
+        rows = conn.execute(
+            f"SELECT * FROM mailbox_connections WHERE {' AND '.join(where)} ORDER BY id DESC",
             tuple(params),
-        ).fetchone()
-        mailbox = dict_from_row(row)
+        ).fetchall()
+        mailboxes = [dict_from_row(row) for row in rows]
+    if (
+        organization_id is not None
+        and resolved_id is None
+        and provider is None
+        and len(mailboxes) > 1
+    ):
+        raise ValueError(
+            "Multiple connected sending mailboxes found for this organization. "
+            "Keep one outbound mailbox connected at a time, or select a mailbox explicitly."
+        )
+    mailbox = mailboxes[0] if mailboxes else None
     if not mailbox:
-        raise ValueError("No connected SMTP/IMAP mailbox found. Connect and test a mailbox first.")
+        raise ValueError("No connected sending mailbox found. Connect and test a mailbox first.")
     return mailbox
 
 
@@ -330,7 +604,7 @@ def _mailbox_daily_limit_error(mailbox: dict[str, Any]) -> str | None:
         row = conn.execute(
             "SELECT COUNT(*) AS sent_count FROM email_messages "
             "WHERE organization_id = ? AND direction = 'outbound' "
-            "AND UPPER(status) = 'SENT' AND substr(created_at, 1, 10) = ?",
+            "AND UPPER(status) = 'SENT' AND DATE(created_at) = ?",
             (organization_id, today),
         ).fetchone()
         data = dict_from_row(row) or {}
@@ -356,6 +630,8 @@ def _send_via_smtp(
     password = decrypt_secret(mailbox["smtp_password_secret"])
     if not (host and username and password):
         raise ValueError("Mailbox SMTP host, username, and password are required")
+    if mailbox["smtp_use_ssl"] and port == 587:
+        raise ValueError("SMTP port 587 uses STARTTLS; disable SMTP SSL or use port 465 with SSL")
 
     from_email = mailbox["email_address"]
     display_name = mailbox.get("display_name") or from_email
@@ -412,8 +688,8 @@ def _imap_client(mailbox: dict[str, Any]):
     host = mailbox["imap_host"]
     port = int(mailbox["imap_port"] or (993 if mailbox["imap_use_ssl"] else 143))
     if mailbox["imap_use_ssl"]:
-        return imaplib.IMAP4_SSL(host, port)
-    return imaplib.IMAP4(host, port)
+        return imaplib.IMAP4_SSL(host, port, timeout=settings.mailbox_connection_timeout_seconds)
+    return imaplib.IMAP4(host, port, timeout=settings.mailbox_connection_timeout_seconds)
 
 
 def _extract_fetch_bytes(fetched: list[Any]) -> bytes:
@@ -450,6 +726,46 @@ def _normalize_imap_message(raw_message: bytes, mailbox: dict[str, Any], uid: st
         "attachments": attachments,
         "labels": ["received"],
         "provider": "smtp_imap",
+    }
+
+
+def _normalize_microsoft_message(message: dict[str, Any], mailbox: dict[str, Any]) -> dict[str, Any]:
+    body = message.get("body") or {}
+    body_content = body.get("content") or ""
+    content_type = str(body.get("contentType") or "").lower()
+    sender = ((message.get("from") or {}).get("emailAddress") or {})
+    sender_name = sender.get("name") or sender.get("address") or ""
+    sender_address = sender.get("address") or ""
+    from_value = formataddr((sender_name, sender_address)) if sender_address else sender_name
+    to_values = [
+        (recipient.get("emailAddress") or {}).get("address")
+        for recipient in message.get("toRecipients") or []
+        if (recipient.get("emailAddress") or {}).get("address")
+    ]
+    headers = {
+        str(header.get("name") or "").lower(): str(header.get("value") or "")
+        for header in message.get("internetMessageHeaders") or []
+        if header.get("name")
+    }
+    message_id = message.get("internetMessageId") or f"microsoft:{mailbox['id']}:{message.get('id')}"
+    thread_id = message.get("conversationId") or headers.get("references") or headers.get("in-reply-to") or message_id
+    html = body_content if content_type == "html" else ""
+    text = _html_to_text(body_content) if content_type == "html" else body_content
+    return {
+        "id": f"microsoft:{message.get('id')}",
+        "message_id": message_id,
+        "thread_id": thread_id,
+        "from": from_value,
+        "to": to_values or [mailbox["email_address"]],
+        "subject": str(message.get("subject") or ""),
+        "text": text,
+        "html": html,
+        "extracted_text": text or _html_to_text(html),
+        "created_at": message.get("receivedDateTime"),
+        "headers": headers,
+        "attachments": [],
+        "labels": ["received"],
+        "provider": "microsoft",
     }
 
 
@@ -514,6 +830,18 @@ def _update_mailbox_sync_state(mailbox_id: int, error: str | None) -> None:
         with conn:
             conn.execute(
                 "UPDATE mailbox_connections SET last_sync_at = ?, last_error = ?, updated_at = ? WHERE id = ?",
+                (now, error, now, mailbox_id),
+            )
+
+
+def record_mailbox_sync_failure(mailbox_id: int, error: str, *, disable: bool = False) -> None:
+    """Persist sync failure details without exposing mailbox secrets."""
+    now = datetime.datetime.now(datetime.UTC).isoformat().replace("+00:00", "Z")
+    status_sql = ", status = 'FAILED'" if disable else ""
+    with get_conn() as conn:
+        with conn:
+            conn.execute(
+                f"UPDATE mailbox_connections SET last_sync_at = ?, last_error = ?, updated_at = ?{status_sql} WHERE id = ?",
                 (now, error, now, mailbox_id),
             )
 

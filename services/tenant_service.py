@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import datetime
+import hashlib
 import imaplib
 import json
 import logging
@@ -28,8 +29,57 @@ MANAGER_ROLES = {"org_admin", "sales_manager"}
 WORKFLOW_ROLES = {"org_admin", "sales_manager", "sales_user"}
 READ_ROLES = {"org_admin", "sales_manager", "sales_user", "viewer"}
 SUBSCRIPTION_ACTIVE_STATUSES = {"ACTIVE", "TRIALING"}
+LLM_PROVIDER_MODES = {"platform_first", "organization_first", "organization_only"}
+LLM_ROUTING_MODES = {"quality_first", "balanced", "cost_optimized"}
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 SLUG_RE = re.compile(r"[^a-z0-9]+")
+MAILBOX_PROVIDER_DEFINITIONS: dict[str, dict[str, Any]] = {
+    "smtp_imap": {
+        "provider": "smtp_imap",
+        "label": "SMTP / IMAP",
+        "connection_type": "credentials",
+        "status": "available",
+        "supports_sending": True,
+        "supports_reply_sync": True,
+        "supports_testing": True,
+        "supports_webhooks": False,
+        "description": "Use tenant-owned SMTP credentials for sending and IMAP for inbound reply polling.",
+    },
+    "resend": {
+        "provider": "resend",
+        "label": "Resend",
+        "connection_type": "api_key",
+        "status": "available",
+        "supports_sending": True,
+        "supports_reply_sync": False,
+        "supports_testing": True,
+        "supports_webhooks": True,
+        "description": "Use a tenant-owned Resend API key for sending and Resend webhooks for inbound events.",
+    },
+    "gmail": {
+        "provider": "gmail",
+        "label": "Google Gmail / Workspace",
+        "connection_type": "oauth",
+        "status": "planned",
+        "supports_sending": False,
+        "supports_reply_sync": False,
+        "supports_testing": False,
+        "supports_webhooks": False,
+        "description": "OAuth-based Gmail or Google Workspace mailbox connection. OAuth flow is not enabled yet.",
+    },
+    "microsoft": {
+        "provider": "microsoft",
+        "label": "Microsoft Outlook / 365",
+        "connection_type": "oauth",
+        "status": "planned",
+        "supports_sending": False,
+        "supports_reply_sync": False,
+        "supports_testing": False,
+        "supports_webhooks": False,
+        "description": "OAuth-based Outlook or Microsoft 365 mailbox connection. OAuth flow is not enabled yet.",
+    },
+}
+OAUTH_MAILBOX_PROVIDERS = {"gmail", "microsoft"}
 TIMEZONE_ALIASES = {
     "Africa/NIAROBI": "Africa/Nairobi",
     "Africa/Niarobi": "Africa/Nairobi",
@@ -39,6 +89,7 @@ TIMEZONE_ALIASES = {
 
 _tenant_cache_lock = threading.Lock()
 _app_user_cache: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
+_membership_cache: dict[tuple[Any, ...], tuple[float, dict[str, Any] | None]] = {}
 _org_list_cache: dict[tuple[Any, ...], tuple[float, list[dict[str, Any]]]] = {}
 _org_resolve_cache: dict[tuple[Any, ...], tuple[float, int]] = {}
 
@@ -47,8 +98,54 @@ def clear_tenant_caches() -> None:
     """Clear short-lived tenant caches after membership, organization, or plan writes."""
     with _tenant_cache_lock:
         _app_user_cache.clear()
+        _membership_cache.clear()
         _org_list_cache.clear()
         _org_resolve_cache.clear()
+
+
+def list_mailbox_provider_definitions() -> list[dict[str, Any]]:
+    return [
+        _with_runtime_mailbox_provider_status(provider, deepcopy(definition))
+        for provider, definition in MAILBOX_PROVIDER_DEFINITIONS.items()
+    ]
+
+
+def get_mailbox_provider_definition(provider: str) -> dict[str, Any]:
+    definition = MAILBOX_PROVIDER_DEFINITIONS.get(provider)
+    if not definition:
+        raise ValueError(f"invalid mailbox provider: {provider}")
+    return _with_runtime_mailbox_provider_status(provider, deepcopy(definition))
+
+
+def _oauth_provider_configured(provider: str) -> bool:
+    if provider == "gmail":
+        return bool(settings.google_oauth_client_id and settings.google_oauth_client_secret)
+    if provider == "microsoft":
+        return bool(settings.microsoft_oauth_client_id and settings.microsoft_oauth_client_secret)
+    return False
+
+
+def _with_runtime_mailbox_provider_status(provider: str, definition: dict[str, Any]) -> dict[str, Any]:
+    if provider in OAUTH_MAILBOX_PROVIDERS and _oauth_provider_configured(provider):
+        definition["status"] = "available"
+        definition["supports_sending"] = True
+        definition["supports_reply_sync"] = True
+        definition["supports_testing"] = True
+        definition["description"] = (
+            f"{definition['label']} OAuth is configured. Tenants can connect their mailbox "
+            "for API-based sending and unread reply polling."
+        )
+    return definition
+
+
+def _ensure_mailbox_provider_available(provider: str) -> dict[str, Any]:
+    definition = get_mailbox_provider_definition(provider)
+    if definition["status"] != "available":
+        raise ValueError(
+            f"{definition['label']} mailbox connections require {definition['connection_type']} setup "
+            "and are not enabled yet."
+        )
+    return definition
 
 
 def _cache_enabled() -> bool:
@@ -65,11 +162,11 @@ def _cache_namespace() -> int:
 
 def _identity_cache_key(claims: dict[str, Any]) -> tuple[Any, ...]:
     identity = user_identity_from_claims(claims)
+    # Keep tenant/auth cache keys stable even when optional Clerk enrichment
+    # intermittently omits or later adds email/name claims.
     return (
         _cache_namespace(),
         identity["clerk_user_id"],
-        identity["email"],
-        identity["name"],
     )
 
 
@@ -249,6 +346,10 @@ def require_system_owner(claims: dict[str, Any]) -> dict[str, Any]:
 
 
 def get_membership(user_id: int, organization_id: int) -> dict[str, Any] | None:
+    cache_key = (_cache_namespace(), int(user_id), int(organization_id))
+    cached = _get_cache(_membership_cache, cache_key)
+    if cached is not None:
+        return cached
     with get_conn() as conn:
         row = conn.execute(
             "SELECT ou.*, o.name AS organization_name, o.slug AS organization_slug "
@@ -257,7 +358,16 @@ def get_membership(user_id: int, organization_id: int) -> dict[str, Any] | None:
             "WHERE ou.user_id = ? AND ou.organization_id = ? AND ou.status = 'ACTIVE'",
             (user_id, organization_id),
         ).fetchone()
-        return dict_from_row(row)
+        membership = dict_from_row(row)
+        _set_cache(_membership_cache, cache_key, membership)
+        return membership
+
+
+def is_platform_organization(organization_id: int | str | None) -> bool:
+    try:
+        return int(organization_id or 0) == int(settings.platform_organization_id)
+    except (TypeError, ValueError):
+        return False
 
 
 def require_org_role(claims: dict[str, Any], organization_id: int, allowed_roles: set[str]) -> dict[str, Any]:
@@ -268,6 +378,17 @@ def require_org_role(claims: dict[str, Any], organization_id: int, allowed_roles
     if not membership or membership.get("role") not in allowed_roles:
         raise PermissionError("organization access denied")
     return {"user": user, "membership": membership, "system_owner": False}
+
+
+def require_org_member_role(claims: dict[str, Any], organization_id: int, allowed_roles: set[str]) -> dict[str, Any]:
+    """Require a real tenant membership; platform ownership alone is not enough."""
+    user = ensure_app_user(claims)
+    if user.get("platform_role") == "system_owner" and is_platform_organization(organization_id):
+        return {"user": user, "membership": None, "system_owner": True}
+    membership = get_membership(int(user["id"]), organization_id)
+    if not membership or membership.get("role") not in allowed_roles:
+        raise PermissionError("tenant member access required")
+    return {"user": user, "membership": membership, "system_owner": user.get("platform_role") == "system_owner"}
 
 
 def resolve_organization_id(
@@ -306,20 +427,21 @@ def resolve_organization_id(
     raise PermissionError("organization access denied")
 
 
-def role_capabilities(role: str) -> dict[str, bool]:
+def role_capabilities(role: str, *, platform_organization: bool = False) -> dict[str, bool]:
     """Return UI-friendly capability flags for an organization role."""
     normalized = role or "viewer"
     is_system_owner = normalized == "system_owner"
     is_admin = normalized == "org_admin" or is_system_owner
     is_manager = normalized in {"org_admin", "sales_manager"} or is_system_owner
-    is_workflow = normalized in WORKFLOW_ROLES or is_system_owner
+    is_workflow = normalized in WORKFLOW_ROLES or (is_system_owner and platform_organization)
     return {
         "can_create_organizations": is_system_owner,
         "can_manage_subscription_plans": is_system_owner,
-        "can_choose_subscription_plan": is_admin,
+        "can_choose_subscription_plan": is_system_owner,
         "can_manage_organization": is_admin,
         "can_manage_users": is_admin,
         "can_manage_mailboxes": is_admin,
+        "can_manage_llm_credentials": is_admin,
         "can_manage_staff": is_manager,
         "can_manage_campaigns": is_workflow,
         "can_manage_leads": is_workflow,
@@ -336,6 +458,47 @@ def _optional_positive_int(value: Any, field: str) -> int | None:
     if resolved < 1:
         raise ValueError(f"{field} must be at least 1")
     return resolved
+
+
+def _routing_modes_value(value: Any, *, default: str) -> str:
+    if isinstance(value, (list, tuple, set)):
+        raw = ",".join(str(item) for item in value)
+    else:
+        raw = str(value or default)
+    modes = []
+    for part in raw.split(","):
+        mode = part.strip()
+        if not mode:
+            continue
+        if mode not in LLM_ROUTING_MODES:
+            raise ValueError("invalid LLM routing mode")
+        if mode not in modes:
+            modes.append(mode)
+    return ",".join(modes or [default])
+
+
+def _routing_modes_list(value: Any, *, default: str = "cost_optimized,balanced,quality_first") -> list[str]:
+    raw = str(value or default)
+    modes = []
+    for part in raw.split(","):
+        mode = part.strip()
+        if mode in LLM_ROUTING_MODES and mode not in modes:
+            modes.append(mode)
+    return modes or [default.split(",", 1)[0]]
+
+
+def _currency_code(value: Any) -> str:
+    code = str(value or "USD").strip().upper()
+    if not re.fullmatch(r"[A-Z]{3}", code):
+        raise ValueError("currency_code must be a 3-letter ISO currency code")
+    return code
+
+
+def _market_code(value: Any) -> str:
+    code = str(value or "GLOBAL").strip().upper()
+    if not re.fullmatch(r"[A-Z0-9_-]{2,16}", code):
+        raise ValueError("market_code must be 2-16 letters, numbers, hyphen, or underscore")
+    return code
 
 
 def _plan_input(data: dict[str, Any], *, partial: bool = False) -> dict[str, Any]:
@@ -363,6 +526,10 @@ def _plan_input(data: dict[str, Any], *, partial: bool = False) -> dict[str, Any
             if value < 0:
                 raise ValueError(f"{key} cannot be negative")
             fields[key] = value
+    if "currency_code" in data or not partial:
+        fields["currency_code"] = _currency_code(data.get("currency_code"))
+    if "market_code" in data or not partial:
+        fields["market_code"] = _market_code(data.get("market_code"))
     for key in (
         "max_users",
         "max_campaigns",
@@ -384,6 +551,32 @@ def _plan_input(data: dict[str, Any], *, partial: bool = False) -> dict[str, Any
         )
     elif not partial:
         fields["overage_price_cents_per_ai_credit"] = None
+    if "allow_byok" in data or not partial:
+        fields["allow_byok"] = 1 if data.get("allow_byok", False) else 0
+    if "byok_provider_mode" in data or not partial:
+        mode = str(data.get("byok_provider_mode") or "platform_first").strip()
+        if mode not in LLM_PROVIDER_MODES:
+            raise ValueError("invalid BYOK provider mode")
+        fields["byok_provider_mode"] = mode
+    if "max_llm_credentials" in data:
+        fields["max_llm_credentials"] = _optional_positive_int(data.get("max_llm_credentials"), "max_llm_credentials")
+    elif not partial:
+        fields["max_llm_credentials"] = None
+    if "allowed_llm_routing_modes" in data or not partial:
+        fields["allowed_llm_routing_modes"] = _routing_modes_value(
+            data.get("allowed_llm_routing_modes"),
+            default="cost_optimized,balanced,quality_first",
+        )
+    if "default_llm_routing_mode" in data or not partial:
+        default_mode = str(data.get("default_llm_routing_mode") or "balanced").strip()
+        if default_mode not in LLM_ROUTING_MODES:
+            raise ValueError("invalid default LLM routing mode")
+        fields["default_llm_routing_mode"] = default_mode
+    if "trial_allowed_llm_routing_modes" in data or not partial:
+        fields["trial_allowed_llm_routing_modes"] = _routing_modes_value(
+            data.get("trial_allowed_llm_routing_modes"),
+            default="cost_optimized",
+        )
     if "active" in data or not partial:
         fields["active"] = 1 if data.get("active", True) else 0
     return fields
@@ -404,9 +597,20 @@ def sanitize_plan(plan: dict[str, Any] | None) -> dict[str, Any] | None:
         "max_monthly_ai_tokens",
         "max_monthly_ai_credits",
         "overage_price_cents_per_ai_credit",
+        "max_llm_credentials",
     ):
         clean[key] = int(clean[key]) if clean.get(key) is not None else None
+    clean["currency_code"] = str(clean.get("currency_code") or "USD").upper()
+    clean["market_code"] = str(clean.get("market_code") or "GLOBAL").upper()
     clean["overage_allowed"] = bool(clean.get("overage_allowed"))
+    clean["allow_byok"] = bool(clean.get("allow_byok"))
+    clean["byok_provider_mode"] = clean.get("byok_provider_mode") or "platform_first"
+    clean["allowed_llm_routing_modes"] = _routing_modes_list(clean.get("allowed_llm_routing_modes"))
+    clean["default_llm_routing_mode"] = clean.get("default_llm_routing_mode") or "balanced"
+    clean["trial_allowed_llm_routing_modes"] = _routing_modes_list(
+        clean.get("trial_allowed_llm_routing_modes"),
+        default="cost_optimized",
+    )
     return clean
 
 
@@ -423,15 +627,19 @@ def create_subscription_plan(data: dict[str, Any], actor_claims: dict[str, Any])
         with conn:
             cur = conn.execute(
                 "INSERT INTO subscription_plans "
-                "(name, slug, description, monthly_price_cents, trial_days, max_users, max_campaigns, "
+                "(name, slug, description, monthly_price_cents, currency_code, market_code, trial_days, max_users, max_campaigns, "
                 "max_leads, max_monthly_emails, max_monthly_ai_tokens, max_monthly_ai_credits, "
-                "overage_allowed, overage_price_cents_per_ai_credit, active, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "overage_allowed, overage_price_cents_per_ai_credit, allow_byok, byok_provider_mode, "
+                "max_llm_credentials, allowed_llm_routing_modes, default_llm_routing_mode, "
+                "trial_allowed_llm_routing_modes, active, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     fields["name"],
                     fields["slug"],
                     fields["description"],
                     fields["monthly_price_cents"],
+                    fields["currency_code"],
+                    fields["market_code"],
                     fields["trial_days"],
                     fields["max_users"],
                     fields["max_campaigns"],
@@ -441,6 +649,12 @@ def create_subscription_plan(data: dict[str, Any], actor_claims: dict[str, Any])
                     fields["max_monthly_ai_credits"],
                     fields["overage_allowed"],
                     fields["overage_price_cents_per_ai_credit"],
+                    fields["allow_byok"],
+                    fields["byok_provider_mode"],
+                    fields["max_llm_credentials"],
+                    fields["allowed_llm_routing_modes"],
+                    fields["default_llm_routing_mode"],
+                    fields["trial_allowed_llm_routing_modes"],
                     fields["active"],
                     now_iso(),
                 ),
@@ -534,6 +748,8 @@ def _subscription_from_row(row: Any) -> dict[str, Any]:
             "slug": subscription.pop("plan_slug"),
             "description": subscription.pop("plan_description"),
             "monthly_price_cents": subscription.pop("plan_monthly_price_cents"),
+            "currency_code": subscription.pop("plan_currency_code", "USD"),
+            "market_code": subscription.pop("plan_market_code", "GLOBAL"),
             "trial_days": subscription.pop("plan_trial_days"),
             "max_users": subscription.pop("plan_max_users"),
             "max_campaigns": subscription.pop("plan_max_campaigns"),
@@ -543,6 +759,12 @@ def _subscription_from_row(row: Any) -> dict[str, Any]:
             "max_monthly_ai_credits": subscription.pop("plan_max_monthly_ai_credits"),
             "overage_allowed": subscription.pop("plan_overage_allowed"),
             "overage_price_cents_per_ai_credit": subscription.pop("plan_overage_price_cents_per_ai_credit"),
+            "allow_byok": subscription.pop("plan_allow_byok", 0),
+            "byok_provider_mode": subscription.pop("plan_byok_provider_mode", "platform_first"),
+            "max_llm_credentials": subscription.pop("plan_max_llm_credentials", None),
+            "allowed_llm_routing_modes": subscription.pop("plan_allowed_llm_routing_modes", None),
+            "default_llm_routing_mode": subscription.pop("plan_default_llm_routing_mode", None),
+            "trial_allowed_llm_routing_modes": subscription.pop("plan_trial_allowed_llm_routing_modes", None),
             "active": subscription.pop("plan_active"),
             "created_at": subscription.pop("plan_created_at"),
             "updated_at": subscription.pop("plan_updated_at"),
@@ -565,11 +787,18 @@ def get_organization_subscription(organization_id: int) -> dict[str, Any]:
         row = conn.execute(
             "SELECT s.*, "
             "p.name AS plan_name, p.slug AS plan_slug, p.description AS plan_description, "
-            "p.monthly_price_cents AS plan_monthly_price_cents, p.trial_days AS plan_trial_days, "
+            "p.monthly_price_cents AS plan_monthly_price_cents, "
+            "p.currency_code AS plan_currency_code, p.market_code AS plan_market_code, "
+            "p.trial_days AS plan_trial_days, "
             "p.max_users AS plan_max_users, p.max_campaigns AS plan_max_campaigns, p.max_leads AS plan_max_leads, "
             "p.max_monthly_emails AS plan_max_monthly_emails, p.max_monthly_ai_tokens AS plan_max_monthly_ai_tokens, "
             "p.max_monthly_ai_credits AS plan_max_monthly_ai_credits, p.overage_allowed AS plan_overage_allowed, "
             "p.overage_price_cents_per_ai_credit AS plan_overage_price_cents_per_ai_credit, "
+            "p.allow_byok AS plan_allow_byok, p.byok_provider_mode AS plan_byok_provider_mode, "
+            "p.max_llm_credentials AS plan_max_llm_credentials, "
+            "p.allowed_llm_routing_modes AS plan_allowed_llm_routing_modes, "
+            "p.default_llm_routing_mode AS plan_default_llm_routing_mode, "
+            "p.trial_allowed_llm_routing_modes AS plan_trial_allowed_llm_routing_modes, "
             "p.active AS plan_active, p.created_at AS plan_created_at, p.updated_at AS plan_updated_at "
             "FROM organization_subscriptions s "
             "JOIN subscription_plans p ON p.id = s.plan_id "
@@ -577,6 +806,37 @@ def get_organization_subscription(organization_id: int) -> dict[str, Any]:
             (organization_id,),
         ).fetchone()
     return _subscription_from_row(row)
+
+
+def _organization_subscriptions_by_id(conn, organization_ids: list[int]) -> dict[int, dict[str, Any]]:
+    if not organization_ids:
+        return {}
+    placeholders = ",".join("?" for _ in organization_ids)
+    rows = conn.execute(
+        "SELECT s.*, "
+        "p.name AS plan_name, p.slug AS plan_slug, p.description AS plan_description, "
+        "p.monthly_price_cents AS plan_monthly_price_cents, "
+        "p.currency_code AS plan_currency_code, p.market_code AS plan_market_code, "
+        "p.trial_days AS plan_trial_days, "
+        "p.max_users AS plan_max_users, p.max_campaigns AS plan_max_campaigns, p.max_leads AS plan_max_leads, "
+        "p.max_monthly_emails AS plan_max_monthly_emails, p.max_monthly_ai_tokens AS plan_max_monthly_ai_tokens, "
+        "p.max_monthly_ai_credits AS plan_max_monthly_ai_credits, p.overage_allowed AS plan_overage_allowed, "
+        "p.overage_price_cents_per_ai_credit AS plan_overage_price_cents_per_ai_credit, "
+        "p.allow_byok AS plan_allow_byok, p.byok_provider_mode AS plan_byok_provider_mode, "
+        "p.max_llm_credentials AS plan_max_llm_credentials, "
+        "p.allowed_llm_routing_modes AS plan_allowed_llm_routing_modes, "
+        "p.default_llm_routing_mode AS plan_default_llm_routing_mode, "
+        "p.trial_allowed_llm_routing_modes AS plan_trial_allowed_llm_routing_modes, "
+        "p.active AS plan_active, p.created_at AS plan_created_at, p.updated_at AS plan_updated_at "
+        "FROM organization_subscriptions s "
+        "JOIN subscription_plans p ON p.id = s.plan_id "
+        f"WHERE s.organization_id IN ({placeholders})",
+        tuple(organization_ids),
+    ).fetchall()
+    return {
+        int(row["organization_id"]): _subscription_from_row(row)
+        for row in rows
+    }
 
 
 def organization_has_active_subscription(organization_id: int) -> bool:
@@ -590,18 +850,79 @@ def require_active_subscription(organization_id: int) -> dict[str, Any]:
     return subscription
 
 
+def resolve_allowed_llm_routing_mode(
+    organization_id: int,
+    requested_mode: str | None,
+    *,
+    fallback_mode: str = "balanced",
+) -> dict[str, Any]:
+    """Resolve a requested routing mode against the organization's plan.
+
+    Paid plans can expose all modes while trials can be restricted to cheap
+    platform-key routing. Returning metadata instead of only a string lets the
+    caller log when a request was downgraded by plan guardrails.
+    """
+    subscription = get_organization_subscription(organization_id)
+    plan = subscription.get("plan") or {}
+    status = str(subscription.get("effective_status") or subscription.get("status") or "").upper()
+    plan_default_mode = str(plan.get("default_llm_routing_mode") or "").strip()
+    default_mode = plan_default_mode if plan_default_mode in LLM_ROUTING_MODES else str(fallback_mode or "balanced")
+    candidate = requested_mode if requested_mode in LLM_ROUTING_MODES else default_mode
+    if status == "TRIALING":
+        allowed = list(plan.get("trial_allowed_llm_routing_modes") or ["cost_optimized"])
+    else:
+        allowed = list(plan.get("allowed_llm_routing_modes") or ["cost_optimized", "balanced", "quality_first"])
+    allowed = [mode for mode in allowed if mode in LLM_ROUTING_MODES] or ["cost_optimized"]
+    if candidate not in allowed:
+        resolved = allowed[0]
+        downgraded = True
+    else:
+        resolved = candidate
+        downgraded = False
+    return {
+        "requested_mode": requested_mode,
+        "default_mode": default_mode,
+        "resolved_mode": resolved,
+        "allowed_modes": allowed,
+        "plan_id": plan.get("id"),
+        "plan_name": plan.get("name"),
+        "plan_slug": plan.get("slug"),
+        "plan_currency_code": plan.get("currency_code"),
+        "plan_market_code": plan.get("market_code"),
+        "plan_allow_byok": bool(plan.get("allow_byok")),
+        "plan_byok_provider_mode": plan.get("byok_provider_mode"),
+        "subscription_status": status,
+        "downgraded": downgraded,
+    }
+
+
 def list_active_subscription_organization_ids() -> list[int]:
     with get_conn() as conn:
         rows = conn.execute(
-            "SELECT organization_id FROM organization_subscriptions "
-            "WHERE status IN ('ACTIVE','TRIALING')"
+            "SELECT s.*, "
+            "p.name AS plan_name, p.slug AS plan_slug, p.description AS plan_description, "
+            "p.monthly_price_cents AS plan_monthly_price_cents, "
+            "p.currency_code AS plan_currency_code, p.market_code AS plan_market_code, "
+            "p.trial_days AS plan_trial_days, "
+            "p.max_users AS plan_max_users, p.max_campaigns AS plan_max_campaigns, p.max_leads AS plan_max_leads, "
+            "p.max_monthly_emails AS plan_max_monthly_emails, p.max_monthly_ai_tokens AS plan_max_monthly_ai_tokens, "
+            "p.max_monthly_ai_credits AS plan_max_monthly_ai_credits, p.overage_allowed AS plan_overage_allowed, "
+            "p.overage_price_cents_per_ai_credit AS plan_overage_price_cents_per_ai_credit, "
+            "p.allow_byok AS plan_allow_byok, p.byok_provider_mode AS plan_byok_provider_mode, "
+            "p.max_llm_credentials AS plan_max_llm_credentials, "
+            "p.allowed_llm_routing_modes AS plan_allowed_llm_routing_modes, "
+            "p.default_llm_routing_mode AS plan_default_llm_routing_mode, "
+            "p.trial_allowed_llm_routing_modes AS plan_trial_allowed_llm_routing_modes, "
+            "p.active AS plan_active, p.created_at AS plan_created_at, p.updated_at AS plan_updated_at "
+            "FROM organization_subscriptions s "
+            "JOIN subscription_plans p ON p.id = s.plan_id "
+            "WHERE s.status IN ('ACTIVE','TRIALING') AND p.active = 1"
         ).fetchall()
-    active: list[int] = []
-    for row in rows:
-        org_id = int(dict_from_row(row)["organization_id"])
-        if organization_has_active_subscription(org_id):
-            active.append(org_id)
-    return active
+    return [
+        int(subscription["organization_id"])
+        for row in rows
+        if (subscription := _subscription_from_row(row)).get("is_active")
+    ]
 
 
 def select_organization_plan(
@@ -609,7 +930,7 @@ def select_organization_plan(
     plan_id: int,
     actor_claims: dict[str, Any],
 ) -> dict[str, Any]:
-    actor_ctx = require_org_role(actor_claims, organization_id, ADMIN_ROLES)
+    actor_ctx = {"user": require_system_owner(actor_claims)}
     plan = get_subscription_plan(plan_id)
     if not plan.get("active"):
         raise ValueError("inactive plans cannot be selected")
@@ -664,6 +985,93 @@ def select_organization_plan(
                     "organization_plan_selected",
                     json.dumps({"subscription_id": subscription_id, "plan_id": plan_id, "status": status}),
                     json.dumps({"actor_user_id": actor_ctx["user"]["id"]}),
+                ),
+            )
+    clear_tenant_caches()
+    return get_organization_subscription(organization_id)
+
+
+def update_organization_subscription(
+    organization_id: int,
+    updates: dict[str, Any],
+    actor_claims: dict[str, Any],
+) -> dict[str, Any]:
+    actor = require_system_owner(actor_claims)
+    current = get_organization_subscription(organization_id)
+    current_plan = current.get("plan") or {}
+    existing_id = current.get("id")
+
+    plan_id = updates.get("plan_id")
+    if plan_id is not None:
+        plan = get_subscription_plan(int(plan_id))
+        if not plan.get("active"):
+            raise ValueError("inactive plans cannot be assigned")
+    else:
+        plan_id = current_plan.get("id")
+        plan = current_plan
+
+    if not existing_id and not plan_id:
+        raise ValueError("plan_id is required when creating a subscription")
+
+    status = str(updates.get("status") or current.get("status") or "ACTIVE").upper()
+    if status not in {"TRIALING", "ACTIVE", "PAST_DUE", "CANCELED", "EXPIRED"}:
+        raise ValueError("invalid subscription status")
+
+    now = now_iso()
+    trial_ends_at = updates.get("trial_ends_at", current.get("trial_ends_at"))
+    current_period_started_at = updates.get(
+        "current_period_started_at",
+        current.get("current_period_started_at") or now,
+    )
+    current_period_ends_at = updates.get(
+        "current_period_ends_at",
+        current.get("current_period_ends_at"),
+    )
+    if status == "TRIALING" and not trial_ends_at:
+        trial_ends_at = future_iso(int((plan or {}).get("trial_days") or 14))
+    if not current_period_ends_at and status in {"TRIALING", "ACTIVE", "PAST_DUE"}:
+        current_period_ends_at = trial_ends_at if status == "TRIALING" else future_iso(30)
+
+    with get_conn() as conn:
+        with conn:
+            if existing_id:
+                subscription_id = int(existing_id)
+                conn.execute(
+                    "UPDATE organization_subscriptions SET plan_id = ?, status = ?, trial_ends_at = ?, "
+                    "current_period_started_at = ?, current_period_ends_at = ?, updated_at = ? WHERE id = ?",
+                    (
+                        int(plan_id),
+                        status,
+                        trial_ends_at,
+                        current_period_started_at,
+                        current_period_ends_at,
+                        now,
+                        subscription_id,
+                    ),
+                )
+            else:
+                cur = conn.execute(
+                    "INSERT INTO organization_subscriptions "
+                    "(organization_id, plan_id, status, trial_ends_at, current_period_started_at, current_period_ends_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        organization_id,
+                        int(plan_id),
+                        status,
+                        trial_ends_at,
+                        current_period_started_at,
+                        current_period_ends_at,
+                        now,
+                    ),
+                )
+                subscription_id = int(cur.lastrowid)
+            conn.execute(
+                "INSERT INTO events (organization_id, type, payload, metadata) VALUES (?, ?, ?, ?)",
+                (
+                    organization_id,
+                    "organization_subscription_updated",
+                    json.dumps({"subscription_id": subscription_id, "plan_id": plan_id, "status": status}),
+                    json.dumps({"actor_user_id": actor["id"]}),
                 ),
             )
     clear_tenant_caches()
@@ -764,9 +1172,24 @@ def list_organizations(actor_claims: dict[str, Any]) -> list[dict[str, Any]]:
                 (user["id"],),
             ).fetchall()
         organizations = [dict_from_row(row) for row in rows]
+        subscriptions_by_org = _organization_subscriptions_by_id(
+            conn,
+            [int(organization["id"]) for organization in organizations],
+        )
         for organization in organizations:
-            organization["capabilities"] = role_capabilities(organization.get("current_user_role", "viewer"))
-            organization["subscription"] = get_organization_subscription(int(organization["id"]))
+            organization["capabilities"] = role_capabilities(
+                organization.get("current_user_role", "viewer"),
+                platform_organization=is_platform_organization(organization.get("id")),
+            )
+            organization["subscription"] = subscriptions_by_org.get(
+                int(organization["id"]),
+                {
+                    "status": "NONE",
+                    "effective_status": "NONE",
+                    "is_active": False,
+                    "plan": None,
+                },
+            )
         _set_cache(_org_list_cache, cache_key, organizations)
         return organizations
 
@@ -841,10 +1264,19 @@ def list_organization_users(organization_id: int, actor_claims: dict[str, Any]) 
 def create_mailbox(organization_id: int, data: dict[str, Any], actor_claims: dict[str, Any]) -> dict[str, Any]:
     actor_ctx = require_org_role(actor_claims, organization_id, ADMIN_ROLES)
     provider = data.get("provider") or "smtp_imap"
-    if provider not in {"smtp_imap", "resend", "gmail", "microsoft"}:
-        raise ValueError(f"invalid mailbox provider: {provider}")
+    _ensure_mailbox_provider_available(provider)
+    if provider in OAUTH_MAILBOX_PROVIDERS:
+        raise ValueError(f"{get_mailbox_provider_definition(provider)['label']} mailboxes must be connected with OAuth")
     email_address = normalize_email(data.get("email_address"))
     with get_conn() as conn:
+        existing = conn.execute(
+            "SELECT id FROM mailbox_connections WHERE organization_id = ? AND email_address = ?",
+            (organization_id, email_address),
+        ).fetchone()
+        if existing:
+            raise ValueError(
+                f"mailbox {email_address} already exists for this organization; edit mailbox #{existing['id']} instead"
+            )
         with conn:
             cur = conn.execute(
                 "INSERT INTO mailbox_connections "
@@ -888,6 +1320,147 @@ def create_mailbox(organization_id: int, data: dict[str, Any], actor_claims: dic
                 ),
             )
         return get_mailbox(organization_id, mailbox_id)
+
+
+def _secret_update_value(new_value: str | None, existing_value: str | None) -> str | None:
+    if new_value is None or new_value == "":
+        return existing_value
+    return encrypt_secret(new_value)
+
+
+def _secret_fingerprint(secret_value: str | None) -> dict[str, Any]:
+    if not secret_value:
+        return {"present": False, "len": 0, "sha12": None}
+    try:
+        decrypted = decrypt_secret(secret_value) or ""
+        return {
+            "present": bool(decrypted),
+            "len": len(decrypted),
+            "sha12": hashlib.sha256(decrypted.encode("utf-8")).hexdigest()[:12],
+        }
+    except Exception as exc:
+        return {"present": True, "decrypt_error": type(exc).__name__}
+
+
+def _mailbox_diagnostics(mailbox: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": mailbox.get("id"),
+        "organization_id": mailbox.get("organization_id"),
+        "provider": mailbox.get("provider"),
+        "email_address": mailbox.get("email_address"),
+        "status": mailbox.get("status"),
+        "smtp_host": mailbox.get("smtp_host"),
+        "smtp_port": mailbox.get("smtp_port"),
+        "smtp_use_ssl": bool(mailbox.get("smtp_use_ssl")),
+        "smtp_username": mailbox.get("smtp_username"),
+        "smtp_password_fingerprint": _secret_fingerprint(mailbox.get("smtp_password_secret")),
+        "imap_host": mailbox.get("imap_host"),
+        "imap_port": mailbox.get("imap_port"),
+        "imap_use_ssl": bool(mailbox.get("imap_use_ssl")),
+        "imap_username": mailbox.get("imap_username"),
+        "imap_password_fingerprint": _secret_fingerprint(mailbox.get("imap_password_secret")),
+        "oauth_refresh_token_fingerprint": _secret_fingerprint(mailbox.get("oauth_refresh_token_secret")),
+    }
+
+
+def update_mailbox(
+    organization_id: int,
+    mailbox_id: int,
+    data: dict[str, Any],
+    actor_claims: dict[str, Any],
+) -> dict[str, Any]:
+    actor_ctx = require_org_role(actor_claims, organization_id, ADMIN_ROLES)
+    provider = data.get("provider") or "smtp_imap"
+    _ensure_mailbox_provider_available(provider)
+    if provider in OAUTH_MAILBOX_PROVIDERS:
+        raise ValueError(f"{get_mailbox_provider_definition(provider)['label']} mailboxes must be connected with OAuth")
+    email_address = normalize_email(data.get("email_address"))
+
+    with get_conn() as conn:
+        existing = conn.execute(
+            "SELECT * FROM mailbox_connections WHERE organization_id = ? AND id = ?",
+            (organization_id, mailbox_id),
+        ).fetchone()
+        current = dict_from_row(existing)
+        if not current:
+            raise ValueError("mailbox not found")
+
+        smtp_password_secret = _secret_update_value(
+            data.get("smtp_password") if provider == "smtp_imap" else None,
+            current.get("smtp_password_secret") if provider == "smtp_imap" else None,
+        )
+        imap_password_secret = _secret_update_value(
+            data.get("imap_password") if provider == "smtp_imap" else None,
+            current.get("imap_password_secret") if provider == "smtp_imap" else None,
+        )
+        resend_api_key_secret = _secret_update_value(
+            data.get("resend_api_key") if provider == "resend" else None,
+            current.get("resend_api_key_secret") if provider == "resend" else None,
+        )
+        resend_webhook_secret_secret = _secret_update_value(
+            data.get("resend_webhook_secret") if provider == "resend" else None,
+            current.get("resend_webhook_secret_secret") if provider == "resend" else None,
+        )
+
+        with conn:
+            conn.execute(
+                "UPDATE mailbox_connections SET "
+                "provider = ?, display_name = ?, email_address = ?, status = 'PENDING', "
+                "smtp_host = ?, smtp_port = ?, smtp_use_ssl = ?, smtp_username = ?, smtp_password_secret = ?, "
+                "imap_host = ?, imap_port = ?, imap_use_ssl = ?, imap_username = ?, imap_password_secret = ?, "
+                "resend_domain = ?, resend_from_email = ?, resend_reply_to = ?, resend_api_key_secret = ?, "
+                "resend_webhook_secret_secret = ?, daily_limit = ?, last_error = NULL, updated_at = ? "
+                "WHERE organization_id = ? AND id = ?",
+                (
+                    provider,
+                    data.get("display_name"),
+                    email_address,
+                    data.get("smtp_host") if provider == "smtp_imap" else None,
+                    data.get("smtp_port") if provider == "smtp_imap" else None,
+                    1 if provider == "smtp_imap" and data.get("smtp_use_ssl", True) else 0,
+                    data.get("smtp_username") if provider == "smtp_imap" else None,
+                    smtp_password_secret,
+                    data.get("imap_host") if provider == "smtp_imap" else None,
+                    data.get("imap_port") if provider == "smtp_imap" else None,
+                    1 if provider == "smtp_imap" and data.get("imap_use_ssl", True) else 0,
+                    data.get("imap_username") if provider == "smtp_imap" else None,
+                    imap_password_secret,
+                    data.get("resend_domain") if provider == "resend" else None,
+                    data.get("resend_from_email") if provider == "resend" else None,
+                    data.get("resend_reply_to") if provider == "resend" else None,
+                    resend_api_key_secret,
+                    resend_webhook_secret_secret,
+                    int(data.get("daily_limit") or 100),
+                    now_iso(),
+                    organization_id,
+                    mailbox_id,
+                ),
+            )
+            conn.execute(
+                "INSERT INTO events (type, payload, metadata) VALUES (?, ?, ?)",
+                (
+                    "mailbox_updated",
+                    json.dumps({"organization_id": organization_id, "mailbox_id": mailbox_id}),
+                    json.dumps({"actor_user_id": actor_ctx["user"]["id"]}),
+                ),
+            )
+            updated_row = conn.execute(
+                "SELECT * FROM mailbox_connections WHERE organization_id = ? AND id = ?",
+                (organization_id, mailbox_id),
+            ).fetchone()
+            logger.info(
+                "Mailbox updated",
+                extra={
+                    "kind": "mailbox_updated",
+                    "component": "mailbox",
+                    "data": {
+                        **_mailbox_diagnostics(dict_from_row(updated_row) or {}),
+                        "smtp_password_changed": bool(data.get("smtp_password")),
+                        "imap_password_changed": bool(data.get("imap_password")),
+                    },
+                },
+            )
+    return get_mailbox(organization_id, mailbox_id)
 
 
 def list_mailboxes(organization_id: int, actor_claims: dict[str, Any]) -> list[dict[str, Any]]:
@@ -956,26 +1529,70 @@ def test_mailbox(
         result = {"success": True, "status": "CONNECTED", "message": "Resend configuration is present"}
         _update_mailbox_test_state(mailbox_id, "CONNECTED", None)
         return result
+    if mailbox["provider"] in OAUTH_MAILBOX_PROVIDERS:
+        try:
+            from services import mailbox_oauth_service
+
+            mailbox_oauth_service.get_valid_access_token(mailbox)
+        except Exception as exc:
+            error = f"OAuth token check failed: {exc}"
+            _update_mailbox_test_state(mailbox_id, "FAILED", error)
+            return {"success": False, "status": "FAILED", "error": error}
+        result = {"success": True, "status": "CONNECTED", "message": "OAuth token is valid"}
+        _update_mailbox_test_state(mailbox_id, "CONNECTED", None)
+        return result
     if mailbox["provider"] != "smtp_imap":
         result = {"success": False, "status": "FAILED", "error": "provider does not support mailbox testing yet"}
         _update_mailbox_test_state(mailbox_id, "FAILED", result["error"])
         return result
 
+    logger.info(
+        "Testing mailbox connection",
+        extra={
+            "kind": "mailbox_test_start",
+            "component": "mailbox",
+            "data": _mailbox_diagnostics(mailbox),
+        },
+    )
     errors: list[str] = []
     try:
         _test_smtp(mailbox, smtp_factory=smtp_factory)
     except Exception as exc:
         errors.append(f"SMTP: {exc}")
+        logger.warning(
+            "SMTP mailbox test failed",
+            extra={
+                "kind": "mailbox_test_smtp_failed",
+                "component": "mailbox",
+                "data": {**_mailbox_diagnostics(mailbox), "error": str(exc)},
+            },
+        )
     try:
         _test_imap(mailbox, imap_factory=imap_factory)
     except Exception as exc:
         errors.append(f"IMAP: {exc}")
+        logger.warning(
+            "IMAP mailbox test failed",
+            extra={
+                "kind": "mailbox_test_imap_failed",
+                "component": "mailbox",
+                "data": {**_mailbox_diagnostics(mailbox), "error": str(exc)},
+            },
+        )
 
     if errors:
         error = "; ".join(errors)
         _update_mailbox_test_state(mailbox_id, "FAILED", error)
         return {"success": False, "status": "FAILED", "error": error}
     _update_mailbox_test_state(mailbox_id, "CONNECTED", None)
+    logger.info(
+        "Mailbox test passed",
+        extra={
+            "kind": "mailbox_test_passed",
+            "component": "mailbox",
+            "data": _mailbox_diagnostics(mailbox),
+        },
+    )
     return {"success": True, "status": "CONNECTED"}
 
 
@@ -995,8 +1612,10 @@ def _test_smtp(mailbox: dict[str, Any], *, smtp_factory: Callable[..., Any] | No
     password = decrypt_secret(mailbox.get("smtp_password_secret"))
     if not (host and username and password):
         raise ValueError("SMTP host, username, and password are required")
+    if mailbox.get("smtp_use_ssl") and port == 587:
+        raise ValueError("SMTP port 587 uses STARTTLS; disable SMTP SSL or use port 465 with SSL")
     factory = smtp_factory or (smtplib.SMTP_SSL if mailbox.get("smtp_use_ssl") else smtplib.SMTP)
-    client = factory(host, port, timeout=15)
+    client = factory(host, port, timeout=settings.mailbox_connection_timeout_seconds)
     try:
         if not mailbox.get("smtp_use_ssl") and hasattr(client, "starttls"):
             client.starttls()
@@ -1018,7 +1637,7 @@ def _test_imap(mailbox: dict[str, Any], *, imap_factory: Callable[..., Any] | No
     if not (host and username and password):
         raise ValueError("IMAP host, username, and password are required")
     factory = imap_factory or (imaplib.IMAP4_SSL if mailbox.get("imap_use_ssl") else imaplib.IMAP4)
-    client = factory(host, port)
+    client = factory(host, port, timeout=settings.mailbox_connection_timeout_seconds)
     try:
         client.login(username, password)
         client.select("INBOX", readonly=True)
@@ -1060,8 +1679,11 @@ def sanitize_mailbox(mailbox: dict[str, Any]) -> dict[str, Any]:
     clean.pop("imap_password_secret", None)
     clean.pop("resend_api_key_secret", None)
     clean.pop("resend_webhook_secret_secret", None)
+    clean.pop("oauth_access_token_secret", None)
+    clean.pop("oauth_refresh_token_secret", None)
     clean["has_smtp_password"] = bool(mailbox.get("smtp_password_secret"))
     clean["has_imap_password"] = bool(mailbox.get("imap_password_secret"))
     clean["has_resend_api_key"] = bool(mailbox.get("resend_api_key_secret"))
     clean["has_resend_webhook_secret"] = bool(mailbox.get("resend_webhook_secret_secret"))
+    clean["has_oauth_refresh_token"] = bool(mailbox.get("oauth_refresh_token_secret"))
     return clean

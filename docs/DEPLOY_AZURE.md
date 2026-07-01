@@ -56,6 +56,12 @@ CRON_SECRET=...
 MAILBOX_ENCRYPTION_KEY=...
 REQUIRE_HUMAN_APPROVAL=true
 SCHEDULED_SENDER_ENABLED=false
+MAILBOX_SYNC_DEFAULT_LIMIT=10
+MAILBOX_SYNC_ENABLED=false
+MAILBOX_SYNC_MARK_SEEN=true
+MAILBOX_SYNC_WAIT=false
+MAILBOX_SYNC_INTERVAL_SECONDS=300
+MAILBOX_CONNECTION_TIMEOUT_SECONDS=15
 ```
 
 Add one AI provider path:
@@ -86,6 +92,15 @@ RESEND_REPLY_TO=sdr@yourdomain.com
 RESEND_WEBHOOK_SECRET=...
 ```
 
+or, for connected tenant mailboxes:
+
+```env
+EMAIL_PROVIDER=mailbox
+MAILBOX_ENCRYPTION_KEY=...
+DEFAULT_MAILBOX_ID=
+REQUIRE_EMAIL_MONITOR_HUMAN_APPROVAL=true
+```
+
 ## Database Setup
 
 1. Create Azure Database for PostgreSQL Flexible Server.
@@ -100,13 +115,19 @@ export DATABASE_URL="postgresql://DB_USER:DB_PASSWORD@DB_HOST:5432/DB_NAME?sslmo
 uv run scripts/apply_postgres_schema.py
 ```
 
+For existing production databases, apply tracked incremental migrations after pulling new code:
+
+```bash
+uv run scripts/apply_postgres_migrations.py
+```
+
 Optional demo seed:
 
 ```bash
 uv run scripts/apply_postgres_schema.py --seed
 ```
 
-The Azure deployment should use `db/schema_pg.sql`; do not rely on the SQLite bootstrap path for managed PostgreSQL.
+The Azure deployment should use `db/schema_pg.sql` for first-time bootstrap and `scripts/apply_postgres_migrations.py` for existing databases. Do not rely on the SQLite bootstrap path for managed PostgreSQL.
 
 ## Backend Container App
 
@@ -189,9 +210,31 @@ The app has an in-process scheduled sender for local development and simple sing
 For production, prefer:
 
 - `SCHEDULED_SENDER_ENABLED=false`
-- Azure Container Apps Job or Azure Function timer calling the due-work endpoint with `X-Cron-Secret`
+- Azure Container Apps Job or Azure Function timer calling due-work endpoints with `X-Cron-Secret`
 
-This prevents duplicate sends when multiple backend replicas are running.
+This prevents duplicate sends when multiple backend replicas are running. The GitHub deployment workflow deploys the backend and frontend; it does not create or own the Azure timer/job. Create the timer/job in Azure and point it at the deployed backend.
+
+Scheduled outbound email sender:
+
+```bash
+curl -X POST "https://YOUR_BACKEND_DOMAIN/api/scheduled-emails/send-due" \
+  -H "Content-Type: application/json" \
+  -H "X-Cron-Secret: YOUR_CRON_SECRET" \
+  -d '{"limit":50}'
+```
+
+SMTP/IMAP mailbox monitoring:
+
+```bash
+curl -X POST "https://YOUR_BACKEND_DOMAIN/api/mailboxes/sync-due" \
+  -H "Content-Type: application/json" \
+  -H "X-Cron-Secret: YOUR_CRON_SECRET" \
+  -d '{"wait":false,"mark_seen":true,"limit":10}'
+```
+
+Recommended mailbox scheduler cadence is every 5 minutes. Configure the same cadence in Azure and in `MAILBOX_SYNC_INTERVAL_SECONDS=300` so the runtime settings document what the scheduler is expected to do. In production, keep `MAILBOX_SYNC_MARK_SEEN=true` so already processed IMAP messages do not remain unread forever. The app also stores inbound `external_message_id` values and skips duplicates before LLM processing as a second protection against repeated drafts.
+
+For local development or a simple single-replica demo, you can set `MAILBOX_SYNC_ENABLED=true` to run an in-process mailbox poller while `uvicorn` is running. Keep it `false` in Azure multi-replica production so only the external scheduler polls mailboxes.
 
 ## Webhooks
 
@@ -226,4 +269,5 @@ Keep provider webhook signing secrets aligned with `WEBHOOK_SECRET` or `RESEND_W
 7. Create Azure Static Web App.
 8. Configure GitHub OIDC federated credential for `.github/workflows/deploy-azure.yml`.
 9. Configure `azure-production` GitHub environment secrets/vars.
+   - Add `DATABASE_URL` as an environment secret if GitHub Actions should apply migrations before backend rollout.
 10. Point DNS/custom domains after `/health`, `/health/db`, sign-in, and draft approval are verified.

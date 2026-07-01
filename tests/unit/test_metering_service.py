@@ -49,7 +49,7 @@ def test_customer_usage_summary_counts_actions_platform_events_and_cost(metering
     tenant_service.select_organization_plan(
         org["id"],
         plan["id"],
-        _claims(email="admin@usage.test", sub="invited:admin@usage.test"),
+        _claims(),
     )
 
     action = metering_service.record_ai_usage_action(
@@ -102,7 +102,7 @@ def test_ai_usage_action_context_links_current_action(metering_db):
     tenant_service.select_organization_plan(
         org["id"],
         plan["id"],
-        _claims(email="admin@context.test", sub="invited:admin@context.test"),
+        _claims(),
     )
 
     with metering_service.ai_usage_action_context(

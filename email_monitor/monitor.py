@@ -16,7 +16,7 @@ from .email_sender import EmailSenderAgent
 from .security import validate_email_security
 from .data_utils import get_email_metadata
 from utils.db_connection import get_conn, sql_bool_true
-from services import campaign_context_service, metering_service
+from services import campaign_context_service, metering_service, tenant_service
 
 # Setup logging
 setup_logging()
@@ -123,48 +123,60 @@ class EmailMonitorSystem:
         intent: str, reply_sent: bool, attachments: list[dict[str, Any]] | None = None,
         campaign_id: int | None = None,
         organization_id: int | None = None,
+        external_message_id: str | None = None,
+        external_thread_id: str | None = None,
     ):
         """Match inbound email to a lead, log the message, and update lead status."""
         try:
-            conn = get_conn()
-            if campaign_id:
-                cur = conn.execute(
-                    "SELECT l.id, l.organization_id, l.status FROM leads l "
-                    "JOIN campaign_leads cl ON cl.lead_id = l.id "
-                    "WHERE l.email = ? AND cl.campaign_id = ? "
-                    + ("AND l.organization_id = ?" if organization_id is not None else ""),
-                    (sender_email, campaign_id, organization_id)
-                    if organization_id is not None
-                    else (sender_email, campaign_id),
-                )
-            elif organization_id is not None:
-                cur = conn.execute(
-                    "SELECT id, organization_id, status FROM leads WHERE email = ? AND organization_id = ?",
-                    (sender_email, organization_id),
-                )
-            else:
-                cur = conn.execute("SELECT id, organization_id, status FROM leads WHERE email = ?", (sender_email,))
-            row = cur.fetchone()
-            if not row:
-                logger.info(f"No lead record for {sender_email}, skipping DB update")
-                return
+            with get_conn() as conn:
+                if campaign_id:
+                    cur = conn.execute(
+                        "SELECT l.id, l.organization_id, l.status FROM leads l "
+                        "JOIN campaign_leads cl ON cl.lead_id = l.id "
+                        "WHERE l.email = ? AND cl.campaign_id = ? "
+                        + ("AND l.organization_id = ?" if organization_id is not None else ""),
+                        (sender_email, campaign_id, organization_id)
+                        if organization_id is not None
+                        else (sender_email, campaign_id),
+                    )
+                elif organization_id is not None:
+                    cur = conn.execute(
+                        "SELECT id, organization_id, status FROM leads WHERE email = ? AND organization_id = ?",
+                        (sender_email, organization_id),
+                    )
+                else:
+                    cur = conn.execute("SELECT id, organization_id, status FROM leads WHERE email = ?", (sender_email,))
+                row = cur.fetchone()
+                if not row:
+                    logger.info(f"No lead record for {sender_email}, skipping DB update")
+                    return
 
-            lead_id = row["id"]
-            organization_id = row["organization_id"]
-            import datetime
-            now_iso = datetime.datetime.utcnow().isoformat() + "Z"
+                lead_id = row["id"]
+                organization_id = row["organization_id"]
+                import datetime
+                now_iso = datetime.datetime.utcnow().isoformat() + "Z"
 
-            bt = sql_bool_true()
-            with conn:
+                bt = sql_bool_true()
                 cur = conn.execute(
-                    f"INSERT INTO email_messages (lead_id, direction, subject, body, status, intent, processed) "
-                    f"VALUES (?, 'inbound', ?, ?, 'RECEIVED', ?, {bt})"
+                    "INSERT INTO email_messages "
+                    f"(lead_id, direction, subject, body, status, intent, processed, external_message_id, external_thread_id) "
+                    f"VALUES (?, 'inbound', ?, ?, 'RECEIVED', ?, {bt}, ?, ?)"
                     if organization_id is None
-                    else f"INSERT INTO email_messages (organization_id, lead_id, campaign_id, direction, subject, body, status, intent, processed) "
-                    f"VALUES (?, ?, ?, 'inbound', ?, ?, 'RECEIVED', ?, {bt})",
-                    (lead_id, subject, content[:2000], intent)
+                    else "INSERT INTO email_messages "
+                    f"(organization_id, lead_id, campaign_id, direction, subject, body, status, intent, processed, external_message_id, external_thread_id) "
+                    f"VALUES (?, ?, ?, 'inbound', ?, ?, 'RECEIVED', ?, {bt}, ?, ?)",
+                    (lead_id, subject, content[:2000], intent, external_message_id, external_thread_id)
                     if organization_id is None
-                    else (organization_id, lead_id, campaign_id, subject, content[:2000], intent),
+                    else (
+                        organization_id,
+                        lead_id,
+                        campaign_id,
+                        subject,
+                        content[:2000],
+                        intent,
+                        external_message_id,
+                        external_thread_id,
+                    ),
                 )
                 message_id = cur.lastrowid
                 if message_id:
@@ -228,64 +240,109 @@ class EmailMonitorSystem:
         sender_email: str,
         campaign_id: int | None = None,
         organization_id: int | None = None,
+        thread_id: str | None = None,
     ) -> Optional[Dict[str, Any]]:
         """Look up lead and associated campaign/staff info for richer UI logging."""
         try:
-            conn = get_conn()
-            if campaign_id:
-                row = conn.execute(
-                    "SELECT l.id, l.organization_id, l.name, l.company, l.status, l.industry "
-                    "FROM leads l JOIN campaign_leads cl ON cl.lead_id = l.id "
-                    "WHERE l.email = ? AND cl.campaign_id = ? "
-                    + ("AND l.organization_id = ?" if organization_id is not None else ""),
-                    (sender_email, campaign_id, organization_id)
-                    if organization_id is not None
-                    else (sender_email, campaign_id),
-                ).fetchone()
-            elif organization_id is not None:
-                row = conn.execute(
-                    "SELECT l.id, l.organization_id, l.name, l.company, l.status, l.industry "
-                    "FROM leads l WHERE l.email = ? AND l.organization_id = ?",
-                    (sender_email, organization_id),
-                ).fetchone()
-            else:
-                row = conn.execute(
-                    "SELECT l.id, l.organization_id, l.name, l.company, l.status, l.industry "
-                    "FROM leads l WHERE l.email = ?",
-                    (sender_email,),
-                ).fetchone()
-            if not row:
-                return None
-            lead = dict(row)
+            with get_conn() as conn:
+                if campaign_id:
+                    row = conn.execute(
+                        "SELECT l.id, l.organization_id, l.name, l.company, l.status, l.industry "
+                        "FROM leads l JOIN campaign_leads cl ON cl.lead_id = l.id "
+                        "WHERE l.email = ? AND cl.campaign_id = ? "
+                        + ("AND l.organization_id = ?" if organization_id is not None else ""),
+                        (sender_email, campaign_id, organization_id)
+                        if organization_id is not None
+                        else (sender_email, campaign_id),
+                    ).fetchone()
+                elif organization_id is not None:
+                    row = conn.execute(
+                        "SELECT l.id, l.organization_id, l.name, l.company, l.status, l.industry "
+                        "FROM leads l WHERE l.email = ? AND l.organization_id = ?",
+                        (sender_email, organization_id),
+                    ).fetchone()
+                else:
+                    row = conn.execute(
+                        "SELECT l.id, l.organization_id, l.name, l.company, l.status, l.industry "
+                        "FROM leads l WHERE l.email = ?",
+                        (sender_email,),
+                    ).fetchone()
+                if not row:
+                    return None
+                lead = dict(row)
+                
+                resolved_campaign_id = campaign_id
+                
+                # If campaign_id isn't provided, try to find it from the thread_id
+                if not resolved_campaign_id and thread_id:
+                    try:
+                        thread_row = conn.execute(
+                            "SELECT campaign_id FROM email_messages WHERE external_thread_id = ? AND campaign_id IS NOT NULL LIMIT 1",
+                            (thread_id,)
+                        ).fetchone()
+                        if thread_row:
+                            resolved_campaign_id = thread_row["campaign_id"]
+                    except Exception as e:
+                        logger.debug(f"Failed to lookup campaign by thread_id: {e}")
 
-            campaign_row = conn.execute(
-                "SELECT c.id AS campaign_id, c.name AS campaign_name, "
-                "c.auto_approve_monitor_replies AS auto_approve_monitor_replies "
-                "FROM campaign_leads cl "
-                "JOIN campaigns c ON c.id = cl.campaign_id "
-                "WHERE cl.lead_id = ? "
-                + ("AND c.organization_id = ? " if organization_id is not None else "")
-                + "ORDER BY c.id DESC LIMIT 1",
-                (lead["id"], organization_id) if organization_id is not None else (lead["id"],),
-            ).fetchone()
-            lead["campaign_id"] = campaign_row["campaign_id"] if campaign_row else None
-            lead["campaign_name"] = campaign_row["campaign_name"] if campaign_row else None
-            lead["auto_approve_monitor_replies"] = bool(
-                campaign_row and campaign_row["auto_approve_monitor_replies"]
-            )
+                campaign_filters = ["cl.lead_id = ?"]
+                campaign_params: list[Any] = [lead["id"]]
+                if resolved_campaign_id:
+                    campaign_filters.append("c.id = ?")
+                    campaign_params.append(resolved_campaign_id)
+                if organization_id is not None:
+                    campaign_filters.append("c.organization_id = ?")
+                    campaign_params.append(organization_id)
+                campaign_row = conn.execute(
+                    "SELECT c.id AS campaign_id, c.name AS campaign_name, "
+                    "c.auto_approve_monitor_replies AS auto_approve_monitor_replies, "
+                    "c.llm_routing_mode AS llm_routing_mode "
+                    "FROM campaign_leads cl "
+                    "JOIN campaigns c ON c.id = cl.campaign_id "
+                    f"WHERE {' AND '.join(campaign_filters)} "
+                    "ORDER BY c.id DESC LIMIT 1",
+                    tuple(campaign_params),
+                ).fetchone()
+                lead["campaign_id"] = campaign_row["campaign_id"] if campaign_row else None
+                lead["campaign_name"] = campaign_row["campaign_name"] if campaign_row else None
+                lead["auto_approve_monitor_replies"] = bool(
+                    campaign_row and campaign_row["auto_approve_monitor_replies"]
+                )
+                lead["llm_routing_mode"] = campaign_row["llm_routing_mode"] if campaign_row else None
 
-            staff_row = conn.execute(
-                "SELECT s.name AS staff_name, s.email AS staff_email "
-                "FROM meetings m JOIN staff s ON s.id = m.staff_id "
-                "WHERE m.lead_id = ? ORDER BY m.id DESC LIMIT 1",
-                (lead["id"],),
-            ).fetchone()
-            lead["staff_name"] = staff_row["staff_name"] if staff_row else None
-            lead["staff_email"] = staff_row["staff_email"] if staff_row else None
+                staff_row = conn.execute(
+                    "SELECT s.name AS staff_name, s.email AS staff_email "
+                    "FROM meetings m JOIN staff s ON s.id = m.staff_id "
+                    "WHERE m.lead_id = ? ORDER BY m.id DESC LIMIT 1",
+                    (lead["id"],),
+                ).fetchone()
+                lead["staff_name"] = staff_row["staff_name"] if staff_row else None
+                lead["staff_email"] = staff_row["staff_email"] if staff_row else None
             return lead
         except Exception as e:
             logger.debug(f"Lead context lookup failed: {e}")
             return None
+
+    def _local_conversation_history(self, lead_ctx: dict[str, Any] | None) -> str:
+        """Return durable local campaign context for SMTP/IMAP replies.
+
+        AgentMail thread IDs are UUIDs, while SMTP/IMAP gives RFC Message-ID /
+        References headers. For connected mailboxes, use our campaign context
+        table instead of calling AgentMail with a non-AgentMail thread id.
+        """
+        if not lead_ctx or not lead_ctx.get("id") or not lead_ctx.get("campaign_id"):
+            return ""
+        try:
+            with get_conn() as conn:
+                context = campaign_context_service.get_context(
+                    conn,
+                    int(lead_ctx["campaign_id"]),
+                    int(lead_ctx["id"]),
+                )
+            return campaign_context_service.format_context_for_followup(context)
+        except Exception as exc:
+            logger.debug("Local conversation context lookup failed: %s", exc)
+            return ""
 
     async def process_incoming_email(self, email_data: Dict[str, Any], callback: Optional[Callable[[str, str], Awaitable[None]]] = None) -> EmailActionResult:
         """Complete email processing pipeline with retry logic and meeting scheduling."""
@@ -302,6 +359,7 @@ class EmailMonitorSystem:
             metadata['sender_email'],
             metadata.get("campaign_id"),
             metadata.get("organization_id"),
+            metadata.get("thread_id"),
         )
         if lead_ctx and lead_ctx.get("organization_id"):
             metadata["organization_id"] = lead_ctx["organization_id"]
@@ -347,10 +405,21 @@ class EmailMonitorSystem:
             trace_id=trace_id,
             metadata={"sender": metadata['sender_email'], "subject": metadata['subject']}
         ):
-            with metering_service.ai_usage_action_context(
-                organization_id=metadata.get("organization_id") or 1,
+            from services import platform_settings_service
+            campaign_routing_mode = lead_ctx.get("llm_routing_mode") if lead_ctx else None
+            organization_id = int(metadata.get("organization_id") or 1)
+            requested_routing_mode = campaign_routing_mode
+            routing_policy = tenant_service.resolve_allowed_llm_routing_mode(
+                int(organization_id),
+                requested_routing_mode,
+                fallback_mode=platform_settings_service.get_llm_routing_mode(),
+            )
+            effective_routing_mode = str(routing_policy.get("resolved_mode") or requested_routing_mode or "balanced")
+            workflow_credits = metering_service.credits_for_routing_mode(6, effective_routing_mode)
+            with platform_settings_service.llm_routing_mode_context(campaign_routing_mode), metering_service.ai_usage_action_context(
+                organization_id=organization_id,
                 action_type="inbound_email_handled",
-                credits_used=6,
+                credits_used=workflow_credits,
                 source_object_type="email_message",
                 source_object_id=metadata.get("message_id"),
                 metadata={
@@ -358,6 +427,11 @@ class EmailMonitorSystem:
                     "subject": metadata.get("subject"),
                     "campaign_id": metadata.get("campaign_id"),
                     "thread_id": metadata.get("thread_id"),
+                    "requested_routing_mode": requested_routing_mode,
+                    "default_routing_mode": routing_policy.get("default_mode"),
+                    "routing_mode": effective_routing_mode,
+                    "base_credits": 6,
+                    "credits_used": workflow_credits,
                 },
             ) as usage_action:
                 try:
@@ -425,10 +499,14 @@ class EmailMonitorSystem:
                     logger.info(msg)
                     if callback: await callback("success", msg)
 
-                    # Step 2: Get conversation context (excluding current message to avoid duplication)
-                    conversation_history = await self.fetch_conversation_history(
-                        metadata['thread_id'], metadata['message_id']
-                    ) if metadata['thread_id'] else ""
+                    # Step 2: Get conversation context (excluding current message to avoid duplication).
+                    # SMTP/IMAP thread ids are RFC Message-ID/References headers, not AgentMail UUIDs.
+                    if metadata.get("provider") == "smtp_imap":
+                        conversation_history = self._local_conversation_history(lead_ctx)
+                    else:
+                        conversation_history = await self.fetch_conversation_history(
+                            metadata['thread_id'], metadata['message_id']
+                        ) if metadata['thread_id'] else ""
 
                     # Step 3: Generate response with retry logic
                     max_retries = 2
@@ -567,6 +645,8 @@ class EmailMonitorSystem:
                         metadata['content'], intent.intent, result.action_taken == "sent", metadata.get("attachments"),
                         metadata.get("campaign_id"),
                         metadata.get("organization_id"),
+                        metadata.get("message_id"),
+                        metadata.get("thread_id"),
                     )
 
                     msg = f"Email processing completed: {result.action_taken}"

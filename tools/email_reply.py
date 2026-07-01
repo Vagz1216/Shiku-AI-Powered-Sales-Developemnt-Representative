@@ -53,6 +53,7 @@ def save_reply_draft(
     thread_id: Optional[str] = None,
     subject: Optional[str] = None,
     campaign_id: Optional[int] = None,
+    original_message_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Save an inbound-monitor reply as a local draft awaiting approval."""
     from utils.db_connection import get_conn
@@ -82,13 +83,53 @@ def save_reply_draft(
             if lead_id and organization_id is None:
                 lead_row = conn.execute("SELECT organization_id FROM leads WHERE id = ?", (lead_id,)).fetchone()
                 organization_id = lead_row["organization_id"] if lead_row else None
+            if organization_id is None:
+                return {
+                    'success': False,
+                    'error': 'Organization context is required to save a reply draft.',
+                }
+
+            if original_message_id and lead_id:
+                existing = conn.execute(
+                    "SELECT id, status, external_thread_id FROM email_messages "
+                    "WHERE organization_id = ? AND lead_id = ? AND direction = 'outbound' "
+                    "AND UPPER(COALESCE(status, '')) IN ('DRAFT', 'SCHEDULED') "
+                    "AND external_message_id = ? "
+                    "LIMIT 1",
+                    (organization_id, lead_id, original_message_id),
+                ).fetchone()
+                if existing:
+                    draft_id = existing["id"]
+                    logger.info(
+                        "Reusing existing reply draft %s for %s and inbound message %s",
+                        draft_id,
+                        to_email,
+                        original_message_id,
+                    )
+                    return {
+                        'success': True,
+                        'message_id': f"draft:{draft_id}",
+                        'thread_id': existing["external_thread_id"] or thread_id or "draft",
+                        'draft_id': draft_id,
+                        'method': 'existing_draft',
+                    }
 
             now_iso = datetime.datetime.utcnow().isoformat() + 'Z'
             cur = conn.execute(
                 "INSERT INTO email_messages "
-                "(organization_id, lead_id, campaign_id, direction, subject, body, status, processed, approved, created_at) "
-                "VALUES (?, ?, ?, 'outbound', ?, ?, 'DRAFT', 1, 0, ?)",
-                (organization_id or 1, lead_id, resolved_campaign_id, subject or "Re: Your Message", message, now_iso)
+                "(organization_id, lead_id, campaign_id, direction, subject, body, status, processed, approved, "
+                "external_message_id, external_thread_id, created_at) "
+                "VALUES (?, ?, ?, 'outbound', ?, ?, 'DRAFT', 1, 0, ?, ?, ?)",
+                (
+                    organization_id,
+                    lead_id,
+                    resolved_campaign_id,
+                    subject or "Re: Your Message",
+                    message,
+                    original_message_id,
+                    thread_id,
+                    now_iso,
+                )
             )
             draft_id = cur.lastrowid
         logger.info(f"Saved reply draft to {to_email} due to email monitor human approval")
@@ -135,7 +176,14 @@ def send_reply_email(
             settings.effective_email_monitor_human_approval
             and not campaign_auto_approves_monitor_replies(campaign_id)
         ):
-            return save_reply_draft(to_email, message, thread_id=thread_id, subject=subject, campaign_id=campaign_id)
+            return save_reply_draft(
+                to_email,
+                message,
+                thread_id=thread_id,
+                subject=subject,
+                campaign_id=campaign_id,
+                original_message_id=message_id,
+            )
 
         if settings.email_provider == "mailbox":
             organization_id = campaign_organization_id(campaign_id)

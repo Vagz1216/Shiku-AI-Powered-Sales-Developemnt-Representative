@@ -67,6 +67,10 @@ def _is_future_schedule(value: str | None) -> bool:
     return parsed > datetime.datetime.now(datetime.UTC)
 
 
+def _schedule_was_requested(value: str | None) -> bool:
+    return bool((value or "").strip())
+
+
 def _is_safety_system_unavailable(error: str | None) -> bool:
     return "Safety check system unavailable" in (error or "")
 
@@ -322,11 +326,31 @@ async def process_single_draft_approval(
     draft["body"] = clean_quick_reply_text(draft["body"])
     approval_id = _new_approval_id(draft_id, actor_id)
     if approved:
-        normalized_schedule = _schedule_iso(scheduled_send_at)
-        if _is_future_schedule(normalized_schedule):
+        try:
+            normalized_schedule = _schedule_iso(scheduled_send_at)
+        except ValueError as exc:
+            return {
+                "draft_id": draft_id,
+                "status": "validation_error",
+                "error": f"Invalid scheduled send time: {exc}",
+            }
+        if _schedule_was_requested(scheduled_send_at):
+            if not normalized_schedule:
+                return {
+                    "draft_id": draft_id,
+                    "status": "validation_error",
+                    "error": "Scheduled send time is required.",
+                }
+            if not _is_future_schedule(normalized_schedule):
+                return {
+                    "draft_id": draft_id,
+                    "status": "validation_error",
+                    "error": "Scheduled send time must be in the future.",
+                }
             conn.execute(
                 "UPDATE email_messages SET approved = 1, status = 'SCHEDULED', "
-                "approved_by = ?, approved_at = ?, scheduled_send_at = ? WHERE id = ?",
+                "approved_by = ?, approved_at = ?, scheduled_send_at = ?, "
+                "send_attempts = 0, last_error = NULL WHERE id = ?",
                 (actor_id, _now_iso(), normalized_schedule, draft_id),
             )
             _log_draft_event(

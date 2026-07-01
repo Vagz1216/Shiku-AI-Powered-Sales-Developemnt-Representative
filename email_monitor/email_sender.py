@@ -190,6 +190,7 @@ class EmailSenderAgent:
                 thread_id=thread_id,
                 subject=subject_text if subject_text.lower().startswith("re:") else f"Re: {subject_text or 'Your Message'}",
                 campaign_id=campaign_id,
+                original_message_id=message_id,
             )
             return EmailActionResult(
                 action_taken="drafted_for_approval" if draft_result.get("success") else "error",

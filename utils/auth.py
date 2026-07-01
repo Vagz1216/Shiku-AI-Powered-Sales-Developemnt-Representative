@@ -115,11 +115,24 @@ class ClerkAuth:
             payload.update(profile)
             if cache_ttl > 0:
                 cache_profile = {k: payload[k] for k in ("email", "name") if payload.get(k)}
-                if cache_profile:
-                    with self._user_cache_lock:
-                        self._user_cache[user_id] = (time.time() + cache_ttl, cache_profile)
+                fallback_ttl = min(
+                    cache_ttl,
+                    max(10, settings.clerk_user_enrichment_circuit_cooldown_seconds or 10),
+                )
+                with self._user_cache_lock:
+                    self._user_cache[user_id] = (
+                        time.time() + (cache_ttl if cache_profile else fallback_ttl),
+                        cache_profile,
+                    )
         except Exception as e:
             logger.warning("Failed to enrich Clerk user payload: %s", e)
+            if cache_ttl > 0:
+                fallback_ttl = min(
+                    cache_ttl,
+                    max(10, settings.clerk_user_enrichment_circuit_cooldown_seconds or 10),
+                )
+                with self._user_cache_lock:
+                    self._user_cache[user_id] = (time.time() + fallback_ttl, {})
         return payload
 
     async def _get_enriched_profile(self, user_id: str) -> Dict[str, Any]:

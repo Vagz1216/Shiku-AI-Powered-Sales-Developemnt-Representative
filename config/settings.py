@@ -83,13 +83,20 @@ class AppConfig(BaseSettings):
         ge=0,
     )
     postgres_pool_max_size: int = Field(
-        default=5,
+        default=20,
         validation_alias="POSTGRES_POOL_MAX_SIZE",
         description="Maximum PostgreSQL pooled connections for standard Postgres deployments",
         ge=1,
     )
+    postgres_pool_timeout_seconds: float = Field(
+        default=20.0,
+        validation_alias="POSTGRES_POOL_TIMEOUT_SECONDS",
+        description="Seconds to wait for a PostgreSQL pooled connection before failing fast",
+        gt=0,
+        le=120,
+    )
     clerk_user_cache_ttl_seconds: int = Field(
-        default=300,
+        default=3600,
         validation_alias="CLERK_USER_CACHE_TTL_SECONDS",
         description="Seconds to cache Clerk user profile enrichment after JWT verification",
         ge=0,
@@ -114,6 +121,12 @@ class AppConfig(BaseSettings):
         description="Seconds to cache authenticated user and organization membership lookups",
         ge=0,
         le=600,
+    )
+    platform_organization_id: int = Field(
+        default=1,
+        validation_alias="PLATFORM_ORGANIZATION_ID",
+        description="Organization ID owned by the platform/system owner for first-party workflows",
+        ge=1,
     )
 
     # API Keys (.env: OPENAI_API_KEY, AGENTMAIL_*)
@@ -147,6 +160,21 @@ class AppConfig(BaseSettings):
         validation_alias="AZURE_OPENAI_API_VERSION",
         description="Azure OpenAI API version",
     )
+    azure_deepseek_api_key: str | None = Field(
+        default=None,
+        validation_alias="AZURE_DEEPSEEK_API_KEY",
+        description="Azure DeepSeek (Serverless API) API key",
+    )
+    azure_deepseek_endpoint: str | None = Field(
+        default=None,
+        validation_alias="AZURE_DEEPSEEK_ENDPOINT",
+        description="Azure DeepSeek Serverless API endpoint URL",
+    )
+    azure_deepseek_model: str = Field(
+        default="DeepSeek-R1",
+        validation_alias="AZURE_DEEPSEEK_MODEL",
+        description="Azure DeepSeek model deployment name",
+    )
     azure_openai_wire_api: Literal["chat_completions", "responses"] = Field(
         default="chat_completions",
         validation_alias="AZURE_OPENAI_WIRE_API",
@@ -171,6 +199,76 @@ class AppConfig(BaseSettings):
         default=None,
         validation_alias="GEMINI_API_KEY",
         description="Reserved Gemini API key field so local .env validation stays strict",
+    )
+    llm_routing_mode: Literal["quality_first", "balanced", "cost_optimized"] = Field(
+        default="quality_first",
+        validation_alias="LLM_ROUTING_MODE",
+        description=(
+            "Provider ordering policy. quality_first preserves the platform hierarchy; "
+            "balanced is task-aware and avoids expensive models for simple work; "
+            "cost_optimized lets low-risk agents try cheaper capable providers first."
+        ),
+    )
+    groq_model: str = Field(
+        default="llama-3.3-70b-versatile",
+        validation_alias="GROQ_MODEL",
+        description="Groq fallback model. Groq is skipped for structured-output agents.",
+    )
+    cerebras_model: str = Field(
+        default="gpt-oss-120b",
+        validation_alias="CEREBRAS_MODEL",
+        description="Cerebras fallback model. Cerebras is skipped for tool-calling agents.",
+    )
+    gemini_model: str = Field(
+        default="gemini-2.5-flash",
+        validation_alias="GEMINI_MODEL",
+        description="Gemini fallback model used through the OpenAI-compatible Gemini endpoint.",
+    )
+    openrouter_meta_model: str = Field(
+        default="meta-llama/llama-3.2-3b-instruct:free",
+        validation_alias="OPENROUTER_META_MODEL",
+        description="OpenRouter Meta fallback model.",
+    )
+    openrouter_llama_model: str = Field(
+        default="meta-llama/llama-3.1-8b-instruct:free",
+        validation_alias="OPENROUTER_LLAMA_MODEL",
+        description="OpenRouter Llama fallback model.",
+    )
+    openrouter_deepseek_model: str = Field(
+        default="qwen/qwen-2-7b-instruct:free",
+        validation_alias="OPENROUTER_DEEPSEEK_MODEL",
+        description="OpenRouter DeepSeek/Qwen fallback model.",
+    )
+    openrouter_google_model: str = Field(
+        default="google/gemini-2.0-flash-lite-preview-02-05:free",
+        validation_alias="OPENROUTER_GOOGLE_MODEL",
+        description="OpenRouter Google fallback model.",
+    )
+    openrouter_auto_model: str = Field(
+        default="openrouter/free",
+        validation_alias="OPENROUTER_AUTO_MODEL",
+        description="OpenRouter auto-router fallback model.",
+    )
+    organization_llm_keys_enabled: bool = Field(
+        default=False,
+        validation_alias="ORGANIZATION_LLM_KEYS_ENABLED",
+        description=(
+            "Feature flag for future organization-owned LLM credentials. When disabled, "
+            "all LLM calls use platform-level provider keys."
+        ),
+    )
+    organization_llm_provider_mode: Literal["platform_first", "organization_first", "organization_only"] = Field(
+        default="platform_first",
+        validation_alias="ORGANIZATION_LLM_PROVIDER_MODE",
+        description=(
+            "Controls how organization-owned LLM keys should be mixed with platform keys "
+            "when ORGANIZATION_LLM_KEYS_ENABLED is enabled."
+        ),
+    )
+    apply_db_migrations_on_startup: bool = Field(
+        default=False,
+        validation_alias="APPLY_DB_MIGRATIONS_ON_STARTUP",
+        description="Optional single-instance Docker/Coolify startup migration switch.",
     )
     google_api_key: str | None = Field(
         default=None,
@@ -252,6 +350,40 @@ class AppConfig(BaseSettings):
         validation_alias="CRM_BASE_URL",
         description="Optional CRM API base URL override",
     )
+    apollo_api_key: str | None = Field(
+        default=None,
+        validation_alias="APOLLO_API_KEY",
+        description="Apollo.io API Key for lead enrichment",
+    )
+    pdl_api_key: str | None = Field(
+        default=None,
+        validation_alias="PDL_API_KEY",
+        description="People Data Labs API Key for free lead discovery fallback",
+    )
+    pdl_max_search_size: int = Field(
+        default=10,
+        validation_alias="PDL_MAX_SEARCH_SIZE",
+        description="Maximum PDL Person Search result size per request; also caps credit burn.",
+        ge=1,
+        le=100,
+    )
+    lead_scout_provider_cooldown_seconds: int = Field(
+        default=900,
+        validation_alias="LEAD_SCOUT_PROVIDER_COOLDOWN_SECONDS",
+        description="Seconds to skip a lead discovery provider after a non-retryable account/schema failure.",
+        ge=0,
+        le=86400,
+    )
+    lead_scout_mock_fallback_enabled: bool = Field(
+        default=False,
+        validation_alias="LEAD_SCOUT_MOCK_FALLBACK_ENABLED",
+        description="Enable simulated lead discovery fallback. Keep false in production.",
+    )
+    tavily_api_key: str | None = Field(
+        default=None,
+        validation_alias="TAVILY_API_KEY",
+        description="Tavily search API key for real-time lead signal research (recent posts, company news)",
+    )
     platform_owner_emails: str = Field(
         default="",
         validation_alias="PLATFORM_OWNER_EMAILS",
@@ -261,6 +393,41 @@ class AppConfig(BaseSettings):
         default=None,
         validation_alias="MAILBOX_ENCRYPTION_KEY",
         description="Fernet key used to encrypt mailbox SMTP/IMAP passwords at rest",
+    )
+    mailbox_oauth_state_secret: str | None = Field(
+        default=None,
+        validation_alias="MAILBOX_OAUTH_STATE_SECRET",
+        description="Secret used to sign mailbox OAuth state payloads",
+    )
+    mailbox_oauth_frontend_redirect_url: str = Field(
+        default="http://localhost:3000/mailboxes",
+        validation_alias="MAILBOX_OAUTH_FRONTEND_REDIRECT_URL",
+        description="Frontend URL to return to after a mailbox OAuth callback",
+    )
+    google_oauth_client_id: str | None = Field(
+        default=None,
+        validation_alias="GOOGLE_OAUTH_CLIENT_ID",
+        description="Google OAuth client ID for tenant Gmail/Workspace mailbox connections",
+    )
+    google_oauth_client_secret: str | None = Field(
+        default=None,
+        validation_alias="GOOGLE_OAUTH_CLIENT_SECRET",
+        description="Google OAuth client secret for tenant Gmail/Workspace mailbox connections",
+    )
+    microsoft_oauth_client_id: str | None = Field(
+        default=None,
+        validation_alias="MICROSOFT_OAUTH_CLIENT_ID",
+        description="Microsoft Entra app client ID for tenant Outlook/Microsoft 365 mailbox connections",
+    )
+    microsoft_oauth_client_secret: str | None = Field(
+        default=None,
+        validation_alias="MICROSOFT_OAUTH_CLIENT_SECRET",
+        description="Microsoft Entra app client secret for tenant Outlook/Microsoft 365 mailbox connections",
+    )
+    microsoft_oauth_tenant: str = Field(
+        default="common",
+        validation_alias="MICROSOFT_OAUTH_TENANT",
+        description="Microsoft OAuth tenant segment, usually common, organizations, or a tenant ID",
     )
     composio_api_key: str | None = Field(
         default=None,
@@ -487,6 +654,13 @@ class AppConfig(BaseSettings):
         gt=0,
         le=3600,
     )
+    scheduled_sender_initial_delay_seconds: int = Field(
+        default=5,
+        validation_alias="SCHEDULED_SENDER_INITIAL_DELAY_SECONDS",
+        description="Startup delay before the in-process scheduled sender first checks the database",
+        ge=0,
+        le=3600,
+    )
     scheduled_sender_batch_size: int = Field(
         default=50,
         validation_alias="SCHEDULED_SENDER_BATCH_SIZE",
@@ -507,6 +681,49 @@ class AppConfig(BaseSettings):
         description="Maximum automatic send attempts before a scheduled email is paused for review",
         gt=0,
         le=20,
+    )
+    mailbox_sync_default_limit: int = Field(
+        default=10,
+        validation_alias="MAILBOX_SYNC_DEFAULT_LIMIT",
+        description="Default unread IMAP messages to inspect per mailbox sync trigger",
+        gt=0,
+        le=25,
+    )
+    mailbox_sync_enabled: bool = Field(
+        default=False,
+        validation_alias="MAILBOX_SYNC_ENABLED",
+        description="Run an in-process SMTP/IMAP mailbox polling loop for local/simple single-replica deployments",
+    )
+    mailbox_sync_mark_seen: bool = Field(
+        default=True,
+        validation_alias="MAILBOX_SYNC_MARK_SEEN",
+        description="Whether production mailbox sync marks successfully handled or deduped IMAP messages as seen",
+    )
+    mailbox_sync_wait: bool = Field(
+        default=False,
+        validation_alias="MAILBOX_SYNC_WAIT",
+        description="Whether /api/mailboxes/sync-due waits for processing before returning by default",
+    )
+    mailbox_sync_interval_seconds: int = Field(
+        default=300,
+        validation_alias="MAILBOX_SYNC_INTERVAL_SECONDS",
+        description="Recommended external scheduler frequency for mailbox sync jobs",
+        gt=0,
+        le=86400,
+    )
+    mailbox_sync_initial_delay_seconds: int = Field(
+        default=15,
+        validation_alias="MAILBOX_SYNC_INITIAL_DELAY_SECONDS",
+        description="Startup delay before the in-process mailbox poller first checks the database",
+        ge=0,
+        le=3600,
+    )
+    mailbox_connection_timeout_seconds: float = Field(
+        default=15.0,
+        validation_alias="MAILBOX_CONNECTION_TIMEOUT_SECONDS",
+        description="Socket timeout for SMTP/IMAP connection tests and IMAP polling",
+        gt=0,
+        le=120,
     )
 
     @field_validator("default_mailbox_id", mode="before")

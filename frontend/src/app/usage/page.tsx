@@ -41,6 +41,7 @@ interface UsageEventRow {
   agent_name: string
   provider: string
   model: string
+  routing_mode: string | null
   input_tokens: number
   output_tokens: number
   total_tokens: number
@@ -102,6 +103,14 @@ interface UnitEconomicsPayload {
   }>
 }
 
+interface PlatformRuntimeSettings {
+  llm_routing_mode: 'quality_first' | 'balanced' | 'cost_optimized'
+  llm_routing_env_default: string
+  allowed_llm_routing_modes: Array<'quality_first' | 'balanced' | 'cost_optimized'>
+  organization_llm_keys_enabled: boolean
+  organization_llm_provider_mode: string
+}
+
 function formatNumber(value: number) {
   return new Intl.NumberFormat('en-US').format(Math.round(value || 0))
 }
@@ -133,6 +142,9 @@ export default function UsagePage() {
   const [usage, setUsage] = useState<UsagePayload | null>(null)
   const [customerUsage, setCustomerUsage] = useState<CustomerUsagePayload | null>(null)
   const [unitEconomics, setUnitEconomics] = useState<UnitEconomicsPayload | null>(null)
+  const [runtimeSettings, setRuntimeSettings] = useState<PlatformRuntimeSettings | null>(null)
+  const [savingRoutingMode, setSavingRoutingMode] = useState(false)
+  const [routingModeFilter, setRoutingModeFilter] = useState('all')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -145,12 +157,23 @@ export default function UsagePage() {
       setLoading(true)
       setError('')
       if (!selectedOrganizationId) return
-      const res = await authedFetch(orgUrl(`${API_BASE}/api/usage/llm?limit=200`))
+      const usageUrl = new URL(orgUrl(`${API_BASE}/api/usage/llm`))
+      usageUrl.searchParams.set('limit', '200')
+      if (routingModeFilter !== 'all') {
+        usageUrl.searchParams.set('routing_mode', routingModeFilter)
+      }
+      const res = await authedFetch(usageUrl.toString())
       if (!res.ok) throw new Error('Failed to load usage')
       setUsage(await res.json() as UsagePayload)
       const customerRes = await authedFetch(orgUrl(`${API_BASE}/api/usage/customer`))
       if (customerRes.ok) {
         setCustomerUsage(await customerRes.json() as CustomerUsagePayload)
+      }
+      const settingsRes = await authedFetch(`${API_BASE}/api/system/runtime-settings`)
+      if (settingsRes.ok) {
+        setRuntimeSettings(await settingsRes.json() as PlatformRuntimeSettings)
+      } else {
+        setRuntimeSettings(null)
       }
       if (selectedOrganization?.capabilities?.can_manage_subscription_plans) {
         const unitRes = await authedFetch(orgUrl(`${API_BASE}/api/usage/unit-economics`))
@@ -165,7 +188,7 @@ export default function UsagePage() {
     } finally {
       setLoading(false)
     }
-  }, [authedFetch, orgUrl, selectedOrganization, selectedOrganizationId])
+  }, [authedFetch, orgUrl, routingModeFilter, selectedOrganization, selectedOrganizationId])
 
   useEffect(() => {
     if (isLoaded && userId && selectedOrganizationId) {
@@ -175,6 +198,24 @@ export default function UsagePage() {
       return () => window.clearTimeout(timer)
     }
   }, [isLoaded, userId, selectedOrganizationId, loadUsage])
+
+  const updateRoutingMode = async (mode: PlatformRuntimeSettings['llm_routing_mode']) => {
+    try {
+      setSavingRoutingMode(true)
+      setError('')
+      const res = await authedFetch(`${API_BASE}/api/system/llm-routing`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
+      })
+      if (!res.ok) throw new Error('Failed to update LLM routing mode')
+      setRuntimeSettings(await res.json() as PlatformRuntimeSettings)
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to update LLM routing mode'))
+    } finally {
+      setSavingRoutingMode(false)
+    }
+  }
 
   if (!isLoaded || !userId) {
     return <div className="flex items-center justify-center min-h-screen">Loading or unauthorized...</div>
@@ -195,19 +236,34 @@ export default function UsagePage() {
   return (
     <AppShell active="usage">
       <main className="flex-1 max-w-[92rem] mx-auto w-full p-8">
-        <div className="flex items-center justify-between gap-4 mb-6">
+        <div className="flex flex-col justify-between gap-4 mb-6 md:flex-row md:items-center">
           <div>
             <h2 className="text-2xl font-bold text-zinc-900 dark:text-zinc-50">LLM Usage</h2>
             <p className="text-sm text-zinc-500 mt-1">
               Token usage and estimated model cost from the local usage ledger.
             </p>
           </div>
-          <button
-            onClick={() => void loadUsage()}
-            className="px-3 py-2 border border-zinc-300 rounded-md text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-          >
-            Refresh
-          </button>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <label className="text-sm text-zinc-600 dark:text-zinc-400">
+              <span className="sr-only">Routing mode filter</span>
+              <select
+                value={routingModeFilter}
+                onChange={(event) => setRoutingModeFilter(event.target.value)}
+                className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+              >
+                <option value="all">All routing modes</option>
+                <option value="quality_first">Quality first</option>
+                <option value="balanced">Balanced</option>
+                <option value="cost_optimized">Cost optimized</option>
+              </select>
+            </label>
+            <button
+              onClick={() => void loadUsage()}
+              className="px-3 py-2 border border-zinc-300 rounded-md text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+            >
+              Refresh
+            </button>
+          </div>
         </div>
 
         {error && <div className="p-4 mb-4 text-red-700 bg-red-100 rounded-lg">{error}</div>}
@@ -247,6 +303,56 @@ export default function UsagePage() {
               <div className="rounded-md border border-zinc-200 p-4 dark:border-zinc-800">
                 <div className="text-xs uppercase text-zinc-500">Internal LLM Cost</div>
                 <div className="mt-2 text-xl font-semibold">{formatCurrency(customerUsage.internal_cost.estimated_cost_usd)}</div>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {runtimeSettings && (
+          <section className="mb-6 rounded-lg border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+            <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <h3 className="font-semibold text-zinc-900 dark:text-zinc-100">LLM Routing</h3>
+                <p className="text-sm text-zinc-500">
+                  Owner setting used by agent fallback before each LLM call unless a campaign override is set. Env default: {runtimeSettings.llm_routing_env_default}.
+                </p>
+              </div>
+              <div className="inline-flex w-full rounded-md border border-zinc-300 p-1 text-sm dark:border-zinc-700 md:w-auto">
+                {runtimeSettings.allowed_llm_routing_modes.map(mode => (
+                  <button
+                    key={mode}
+                    type="button"
+                    disabled={savingRoutingMode || runtimeSettings.llm_routing_mode === mode}
+                    onClick={() => void updateRoutingMode(mode)}
+                    aria-pressed={runtimeSettings.llm_routing_mode === mode}
+                    title={
+                      runtimeSettings.llm_routing_mode === mode
+                        ? `${mode.replace('_', ' ')} is active`
+                        : `Switch future platform-default LLM calls to ${mode.replace('_', ' ')}`
+                    }
+                    className={`flex-1 rounded px-3 py-2 font-medium capitalize md:flex-none ${
+                      runtimeSettings.llm_routing_mode === mode
+                        ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
+                        : 'cursor-pointer text-zinc-700 hover:bg-zinc-100 disabled:opacity-60 dark:text-zinc-200 dark:hover:bg-zinc-800'
+                    }`}
+                  >
+                    {mode.replace('_', ' ')}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="grid gap-3 text-sm md:grid-cols-3">
+              <div className="rounded-md border border-zinc-200 p-3 dark:border-zinc-800">
+                <div className="font-medium">Quality First</div>
+                <div className="mt-1 text-zinc-500">Azure/OpenAI-first routing for maximum reliability.</div>
+              </div>
+              <div className="rounded-md border border-zinc-200 p-3 dark:border-zinc-800">
+                <div className="font-medium">Balanced</div>
+                <div className="mt-1 text-zinc-500">Recommended: cheaper capable models for simple work, strong models for safety/tools.</div>
+              </div>
+              <div className="rounded-md border border-zinc-200 p-3 dark:border-zinc-800">
+                <div className="font-medium">Cost Optimized</div>
+                <div className="mt-1 text-zinc-500">Aggressive cost saving for high-volume lower-risk workflows.</div>
               </div>
             </div>
           </section>
@@ -353,11 +459,12 @@ export default function UsagePage() {
         <section className="bg-white border border-zinc-200 rounded-lg shadow-sm dark:bg-zinc-900 dark:border-zinc-800 overflow-hidden">
           <div className="px-4 py-3 border-b border-zinc-200 dark:border-zinc-800 font-semibold">Recent Calls</div>
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm min-w-[1120px]">
+            <table className="w-full text-left text-sm min-w-[1220px]">
               <thead className="bg-zinc-50 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400">
                 <tr>
                   <th className="px-4 py-3 font-medium">Time</th>
                   <th className="px-4 py-3 font-medium">Agent</th>
+                  <th className="px-4 py-3 font-medium">Routing</th>
                   <th className="px-4 py-3 font-medium">Model</th>
                   <th className="px-4 py-3 font-medium">Input</th>
                   <th className="px-4 py-3 font-medium">Output</th>
@@ -373,6 +480,15 @@ export default function UsagePage() {
                   <tr key={row.id}>
                     <td className="px-4 py-3 text-zinc-500">{formatTimestamp(row.created_at, selectedOrganization?.timezone)}</td>
                     <td className="px-4 py-3">{row.agent_name}</td>
+                    <td className="px-4 py-3">
+                      {row.routing_mode ? (
+                        <span className="inline-flex rounded-md bg-zinc-100 px-2 py-1 text-xs font-medium capitalize text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
+                          {row.routing_mode.replace('_', ' ')}
+                        </span>
+                      ) : (
+                        <span className="text-zinc-400">Legacy</span>
+                      )}
+                    </td>
                     <td className="px-4 py-3">{row.provider} / {row.model}</td>
                     <td className="px-4 py-3">{formatNumber(row.input_tokens)}</td>
                     <td className="px-4 py-3">{formatNumber(row.output_tokens)}</td>

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from "@clerk/clerk-react";
 import { AppShell } from '@/components/app-shell'
+import { ActionFeedback, type ActionFeedbackState } from '@/components/action-feedback'
 import { useTenantScope } from '@/components/tenant-scope'
 import { fetchWithAuthRetry } from '@/lib/auth-fetch'
 
@@ -45,6 +46,7 @@ export default function StaffPage() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [query, setQuery] = useState('')
+  const [feedback, setFeedback] = useState<ActionFeedbackState>(null)
 
   const [formData, setFormData] = useState({
     id: 0,
@@ -122,6 +124,7 @@ export default function StaffPage() {
     e.preventDefault()
     try {
       setSaving(true)
+      setFeedback(null)
       const payload = {
         name: formData.name,
         email: formData.email,
@@ -129,6 +132,8 @@ export default function StaffPage() {
         availability: formData.availability || null,
         dummy_slots: null
       }
+      const isUpdating = editing
+      const staffName = formData.name
       const url = editing ? orgUrl(`${API_BASE}/api/staff/${formData.id}`) : orgUrl(`${API_BASE}/api/staff`)
       const method = editing ? 'PUT' : 'POST'
       const res = await authedFetch(url, {
@@ -142,8 +147,9 @@ export default function StaffPage() {
       resetForm()
       await loadStaffOnly()
       if (selectedCampaignId) await loadCampaignStaff(selectedCampaignId)
+      setFeedback({ type: 'success', message: `Staff member ${staffName} ${isUpdating ? 'updated' : 'added'} successfully.` })
     } catch (err: unknown) {
-      alert(getErrorMessage(err, 'Failed to save staff'))
+      setFeedback({ type: 'error', message: getErrorMessage(err, 'Failed to save staff') })
     } finally {
       setSaving(false)
     }
@@ -164,14 +170,16 @@ export default function StaffPage() {
     if (!confirm('Delete this staff member?')) return
     try {
       setSaving(true)
+      setFeedback(null)
       const res = await authedFetch(orgUrl(`${API_BASE}/api/staff/${staffId}`), {
         method: 'DELETE',
       })
       if (!res.ok) throw new Error('Failed to delete staff')
       await loadStaffOnly()
       if (selectedCampaignId) await loadCampaignStaff(selectedCampaignId)
+      setFeedback({ type: 'success', message: 'Staff member deleted successfully.' })
     } catch (err: unknown) {
-      alert(getErrorMessage(err, 'Failed to delete staff'))
+      setFeedback({ type: 'error', message: getErrorMessage(err, 'Failed to delete staff') })
     } finally {
       setSaving(false)
     }
@@ -187,6 +195,7 @@ export default function StaffPage() {
     if (!selectedCampaignId) return
     try {
       setSaving(true)
+      setFeedback(null)
       const res = await authedFetch(orgUrl(`${API_BASE}/api/campaigns/${selectedCampaignId}/staff`), {
         method: 'PUT',
         headers: {
@@ -196,8 +205,9 @@ export default function StaffPage() {
       })
       if (!res.ok) throw new Error('Failed to save assignments')
       await loadCampaignStaff(selectedCampaignId)
+      setFeedback({ type: 'success', message: 'Campaign staff assignments saved successfully.' })
     } catch (err: unknown) {
-      alert(getErrorMessage(err, 'Failed to save assignments'))
+      setFeedback({ type: 'error', message: getErrorMessage(err, 'Failed to save assignments') })
     } finally {
       setSaving(false)
     }
@@ -224,7 +234,9 @@ export default function StaffPage() {
         <p className="text-sm text-zinc-600 dark:text-zinc-400">
           Assign staff per campaign so meeting notifications only go to the right people.
         </p>
-        {error && <div className="p-4 text-red-700 bg-red-100 rounded-lg">{error}</div>}
+        
+        <ActionFeedback feedback={feedback} onDismiss={() => setFeedback(null)} className="mb-6" />
+        {error && <div className="p-4 mb-6 text-red-700 bg-red-100 rounded-lg">{error}</div>}
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <section className="bg-white border border-zinc-200 rounded-xl shadow-sm dark:bg-zinc-900 dark:border-zinc-800 p-5">

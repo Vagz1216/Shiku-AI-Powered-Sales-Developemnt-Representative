@@ -254,6 +254,7 @@ def get_email_metadata(email_data: Dict[str, Any]) -> Dict[str, Any]:
         'subject': extract_subject(email_data),
         'organization_id': email_data.get('organization_id'),
         'mailbox_id': email_data.get('mailbox_id'),
+        'provider': email_data.get('provider'),
         'timestamp': email_data.get('created_at') or email_data.get('timestamp'),
         'labels': email_data.get('labels', [])
     }

@@ -222,6 +222,103 @@ def test_approve_draft_can_schedule_without_sending(monkeypatch):
     assert row["scheduled_send_at"] == "2999-01-01T10:00:00Z"
 
 
+def test_approve_draft_schedule_resets_previous_send_failure(monkeypatch):
+    conn = _conn()
+    conn.execute(
+        "UPDATE email_messages SET send_attempts = 3, last_error = ? WHERE id = 10",
+        ("Automatic send paused after 3 attempt(s): smtp rejected",),
+    )
+    calls = []
+
+    async def fake_send_plain_email(**kwargs):
+        calls.append(kwargs)
+        return SendEmailResult(ok=True, message_id="msg_123", thread_id="thread_123")
+
+    monkeypatch.setattr(draft_service, "send_plain_email", fake_send_plain_email)
+
+    result = asyncio.run(
+        draft_service.process_single_draft_approval(
+            conn,
+            draft_id=10,
+            approved=True,
+            actor_id="user_123",
+            scheduled_send_at="2999-01-01T10:00:00Z",
+        )
+    )
+
+    row = conn.execute(
+        "SELECT approved, status, scheduled_send_at, send_attempts, last_error FROM email_messages WHERE id = 10"
+    ).fetchone()
+
+    assert result["status"] == "approved_scheduled"
+    assert calls == []
+    assert row["approved"] == 1
+    assert row["status"] == "SCHEDULED"
+    assert row["scheduled_send_at"] == "2999-01-01T10:00:00Z"
+    assert row["send_attempts"] == 0
+    assert row["last_error"] is None
+
+
+def test_approve_draft_rejects_past_schedule_without_sending(monkeypatch):
+    conn = _conn()
+    calls = []
+
+    async def fake_send_plain_email(**kwargs):
+        calls.append(kwargs)
+        return SendEmailResult(ok=True, message_id="msg_123", thread_id="thread_123")
+
+    monkeypatch.setattr(draft_service, "send_plain_email", fake_send_plain_email)
+
+    result = asyncio.run(
+        draft_service.process_single_draft_approval(
+            conn,
+            draft_id=10,
+            approved=True,
+            actor_id="user_123",
+            scheduled_send_at="2000-01-01T10:00:00Z",
+        )
+    )
+
+    row = conn.execute("SELECT approved, status, scheduled_send_at FROM email_messages WHERE id = 10").fetchone()
+
+    assert result["status"] == "validation_error"
+    assert result["error"] == "Scheduled send time must be in the future."
+    assert calls == []
+    assert row["approved"] == 0
+    assert row["status"] == "DRAFT"
+    assert row["scheduled_send_at"] is None
+
+
+def test_approve_draft_rejects_invalid_schedule_without_sending(monkeypatch):
+    conn = _conn()
+    calls = []
+
+    async def fake_send_plain_email(**kwargs):
+        calls.append(kwargs)
+        return SendEmailResult(ok=True, message_id="msg_123", thread_id="thread_123")
+
+    monkeypatch.setattr(draft_service, "send_plain_email", fake_send_plain_email)
+
+    result = asyncio.run(
+        draft_service.process_single_draft_approval(
+            conn,
+            draft_id=10,
+            approved=True,
+            actor_id="user_123",
+            scheduled_send_at="not-a-date",
+        )
+    )
+
+    row = conn.execute("SELECT approved, status, scheduled_send_at FROM email_messages WHERE id = 10").fetchone()
+
+    assert result["status"] == "validation_error"
+    assert result["error"].startswith("Invalid scheduled send time:")
+    assert calls == []
+    assert row["approved"] == 0
+    assert row["status"] == "DRAFT"
+    assert row["scheduled_send_at"] is None
+
+
 def test_send_due_scheduled_drafts_sends_due_email(monkeypatch):
     conn = _conn()
     conn.execute(

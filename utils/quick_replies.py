@@ -105,7 +105,7 @@ def _agentmail_reply_address() -> str:
 def _mailbox_reply_address(organization_id: int | None = None, mailbox_id: int | None = None) -> str | None:
     """Return the best connected tenant mailbox address for quick replies."""
     params: list[object] = []
-    where = ["status = 'CONNECTED'", "provider IN ('smtp_imap', 'resend')"]
+    where = ["status = 'CONNECTED'", "provider IN ('smtp_imap', 'resend', 'gmail', 'microsoft')"]
     if mailbox_id:
         where.append("id = ?")
         params.append(mailbox_id)

@@ -70,7 +70,9 @@ def _assign_campaigns(conn, lead_id: int, campaign_ids: Iterable[int], *, organi
 
 def _lead_select_sql() -> str:
     return (
-        "SELECT l.id, l.organization_id, l.name, l.email, l.company, l.industry, l.pain_points, "
+        "SELECT l.id, l.organization_id, l.name, l.email, l.phone_number, l.linkedin_url, l.company, l.industry, l.pain_points, "
+        "l.job_title, l.seniority, l.location, l.company_size, l.company_website, l.company_description, "
+        "l.recent_activity, l.enrichment_source, l.enrichment_updated_at, l.icp_score, l.icp_rationale, "
         "l.status, l.email_opt_out, l.touch_count, l.last_contacted_at, "
         "l.last_inbound_at, l.created_at FROM leads l WHERE l.id = ?"
     )
@@ -106,15 +108,29 @@ def create_lead(data: Dict[str, Any], organization_id: int = 1) -> Dict[str, Any
         with get_conn() as conn:
             with conn:
                 cur = conn.execute(
-                    "INSERT INTO leads (organization_id, name, email, company, industry, pain_points, status, email_opt_out) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO leads (organization_id, name, email, phone_number, linkedin_url, company, industry, pain_points, "
+                    "job_title, seniority, location, company_size, company_website, company_description, "
+                    "recent_activity, enrichment_source, icp_score, icp_rationale, status, email_opt_out) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         organization_id,
                         data.get("name"),
                         email,
+                        data.get("phone_number"),
+                        data.get("linkedin_url"),
                         data.get("company"),
                         data.get("industry"),
                         data.get("pain_points"),
+                        data.get("job_title"),
+                        data.get("seniority"),
+                        data.get("location"),
+                        data.get("company_size"),
+                        data.get("company_website"),
+                        data.get("company_description"),
+                        data.get("recent_activity"),
+                        data.get("enrichment_source"),
+                        data.get("icp_score"),
+                        data.get("icp_rationale"),
                         status,
                         _bool_to_db(data.get("email_opt_out")),
                     ),
@@ -138,9 +154,21 @@ def update_lead(lead_id: int, data: Dict[str, Any], organization_id: int = 1) ->
     allowed_fields = {
         "name",
         "email",
+        "phone_number",
+        "linkedin_url",
         "company",
         "industry",
         "pain_points",
+        "job_title",
+        "seniority",
+        "location",
+        "company_size",
+        "company_website",
+        "company_description",
+        "recent_activity",
+        "enrichment_source",
+        "icp_score",
+        "icp_rationale",
         "status",
         "email_opt_out",
     }
@@ -235,14 +263,32 @@ def bulk_import_leads(
                                 continue
                             lead_id = dict_from_row(existing)["id"]
                             conn.execute(
-                                "UPDATE leads SET name = COALESCE(?, name), company = COALESCE(?, company), "
+                                "UPDATE leads SET name = COALESCE(?, name), phone_number = COALESCE(?, phone_number), "
+                                "linkedin_url = COALESCE(?, linkedin_url), company = COALESCE(?, company), "
                                 "industry = COALESCE(?, industry), pain_points = COALESCE(?, pain_points), "
+                                "job_title = COALESCE(?, job_title), seniority = COALESCE(?, seniority), "
+                                "location = COALESCE(?, location), company_size = COALESCE(?, company_size), "
+                                "company_website = COALESCE(?, company_website), company_description = COALESCE(?, company_description), "
+                                "recent_activity = COALESCE(?, recent_activity), enrichment_source = COALESCE(?, enrichment_source), "
+                                "icp_score = COALESCE(?, icp_score), icp_rationale = COALESCE(?, icp_rationale), "
                                 "status = ?, email_opt_out = ? WHERE id = ? AND organization_id = ?",
                                 (
                                     raw.get("name"),
+                                    raw.get("phone_number"),
+                                    raw.get("linkedin_url"),
                                     raw.get("company"),
                                     raw.get("industry"),
                                     raw.get("pain_points"),
+                                    raw.get("job_title"),
+                                    raw.get("seniority"),
+                                    raw.get("location"),
+                                    raw.get("company_size"),
+                                    raw.get("company_website"),
+                                    raw.get("company_description"),
+                                    raw.get("recent_activity"),
+                                    raw.get("enrichment_source"),
+                                    raw.get("icp_score"),
+                                    raw.get("icp_rationale"),
                                     status,
                                     _bool_to_db(raw.get("email_opt_out")),
                                     lead_id,
@@ -252,15 +298,29 @@ def bulk_import_leads(
                             updated += 1
                         else:
                             cur = conn.execute(
-                                "INSERT INTO leads (organization_id, name, email, company, industry, pain_points, status, email_opt_out) "
-                                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                                "INSERT INTO leads (organization_id, name, email, phone_number, linkedin_url, company, industry, pain_points, "
+                                "job_title, seniority, location, company_size, company_website, company_description, "
+                                "recent_activity, enrichment_source, icp_score, icp_rationale, status, email_opt_out) "
+                                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                                 (
                                     organization_id,
                                     raw.get("name"),
                                     email,
+                                    raw.get("phone_number"),
+                                    raw.get("linkedin_url"),
                                     raw.get("company"),
                                     raw.get("industry"),
                                     raw.get("pain_points"),
+                                    raw.get("job_title"),
+                                    raw.get("seniority"),
+                                    raw.get("location"),
+                                    raw.get("company_size"),
+                                    raw.get("company_website"),
+                                    raw.get("company_description"),
+                                    raw.get("recent_activity"),
+                                    raw.get("enrichment_source"),
+                                    raw.get("icp_score"),
+                                    raw.get("icp_rationale"),
                                     status,
                                     _bool_to_db(raw.get("email_opt_out")),
                                 ),
@@ -306,8 +366,10 @@ class DBLeadProvider(LeadProvider):
     def get_leads(self, campaign_id: Optional[int] = None, max_leads: Optional[int] = None, order_by: str = 'newest_first', organization_id: Optional[int] = None) -> Dict[str, Any]:
         if using_postgres():
             select_sql = """
-            SELECT l.id, l.name, l.email, l.company, l.industry, l.pain_points, l.status,
-                   l.touch_count, l.created_at,
+            SELECT l.id, l.name, l.email, l.phone_number, l.linkedin_url, l.company, l.industry, l.pain_points, l.status,
+                   l.job_title, l.seniority, l.location, l.company_size, l.company_website, l.company_description,
+                   l.recent_activity, l.enrichment_source, l.enrichment_updated_at, l.icp_score, l.icp_rationale,
+                   MAX(cl.emails_sent) AS touch_count, l.created_at,
                    MAX(cl.emails_sent) AS emails_sent,
                    MAX(cl.responded) AS responded,
                    MAX(cl.meeting_booked) AS meeting_booked
@@ -319,13 +381,16 @@ class DBLeadProvider(LeadProvider):
               AND cl.emails_sent < c.max_emails_per_lead
             """
             group_sql = (
-                "GROUP BY l.id, l.name, l.email, l.company, l.industry, l.pain_points, l.status, "
-                "l.touch_count, l.created_at"
+                "GROUP BY l.id, l.name, l.email, l.phone_number, l.linkedin_url, l.company, l.industry, l.pain_points, l.status, "
+                "l.job_title, l.seniority, l.location, l.company_size, l.company_website, l.company_description, "
+                "l.recent_activity, l.enrichment_source, l.enrichment_updated_at, l.icp_score, l.icp_rationale, l.created_at"
             )
         else:
             select_sql = """
-            SELECT l.id, l.name, l.email, l.company, l.industry, l.pain_points, l.status,
-                   l.touch_count, cl.emails_sent, cl.responded, cl.meeting_booked
+            SELECT l.id, l.name, l.email, l.phone_number, l.linkedin_url, l.company, l.industry, l.pain_points, l.status,
+                   l.job_title, l.seniority, l.location, l.company_size, l.company_website, l.company_description,
+                   l.recent_activity, l.enrichment_source, l.enrichment_updated_at, l.icp_score, l.icp_rationale,
+                   cl.emails_sent AS touch_count, cl.emails_sent, cl.responded, cl.meeting_booked
             FROM leads l
             JOIN campaign_leads cl ON cl.lead_id = l.id
             JOIN campaigns c ON c.id = cl.campaign_id
@@ -371,9 +436,21 @@ class DBLeadProvider(LeadProvider):
                 "id": l.get("id"),
                 "name": l.get("name"),
                 "email": l.get("email"),
+                "phone_number": l.get("phone_number"),
+                "linkedin_url": l.get("linkedin_url"),
                 "company": l.get("company"),
                 "industry": l.get("industry"),
                 "pain_points": l.get("pain_points"),
+                "job_title": l.get("job_title"),
+                "seniority": l.get("seniority"),
+                "location": l.get("location"),
+                "company_size": l.get("company_size"),
+                "company_website": l.get("company_website"),
+                "company_description": l.get("company_description"),
+                "recent_activity": l.get("recent_activity"),
+                "enrichment_source": l.get("enrichment_source"),
+                "icp_score": l.get("icp_score"),
+                "icp_rationale": l.get("icp_rationale"),
                 "status": l.get("status"),
                 "touch_count": l.get("touch_count", 0),
                 "emails_sent": l.get("emails_sent", 0),
@@ -462,10 +539,10 @@ class DBLeadProvider(LeadProvider):
     def get_lead(self, lead_id: Optional[int] = None) -> Optional[dict]:
         with get_conn() as conn:
             if lead_id:
-                cur = conn.execute("SELECT id, name, email, company, industry, pain_points FROM leads WHERE id = ?", (lead_id,))
+                cur = conn.execute("SELECT id, name, email, phone_number, linkedin_url, company, industry, pain_points FROM leads WHERE id = ?", (lead_id,))
             else:
                 cur = conn.execute(
-                    f"SELECT id, name, email, company, industry, pain_points FROM leads ORDER BY {sql_random_order()} LIMIT 1"
+                    f"SELECT id, name, email, phone_number, linkedin_url, company, industry, pain_points FROM leads ORDER BY {sql_random_order()} LIMIT 1"
                 )
             row = cur.fetchone()
         return dict_from_row(row)
@@ -531,3 +608,49 @@ def log_event(event_type: str, payload: Optional[str] = None, metadata: Optional
 
 def get_lead(lead_id: Optional[int] = None) -> Optional[dict]:
     return _provider.get_lead(lead_id)
+
+def delete_lead(lead_id: int, organization_id: int) -> dict[str, Any]:
+    try:
+        with get_conn() as conn:
+            with conn:
+                row = conn.execute(
+                    "SELECT id FROM leads WHERE id = ? AND organization_id = ?",
+                    (lead_id, organization_id),
+                ).fetchone()
+                if not row:
+                    return {"success": False, "error": "lead not found", "data": None}
+                conn.execute("DELETE FROM leads WHERE id = ?", (lead_id,))
+        return {"success": True, "error": None, "data": {"deleted_id": lead_id}}
+    except Exception as e:
+        logger.error(f"Failed to delete lead {lead_id}: {e}")
+        return {"success": False, "error": str(e), "data": None}
+
+def bulk_delete_leads(lead_ids: list[int], organization_id: int) -> dict[str, Any]:
+    try:
+        if not lead_ids:
+            return {"success": True, "error": None, "data": {"deleted_count": 0}}
+            
+        with get_conn() as conn:
+            with conn:
+                placeholders = ",".join("?" for _ in lead_ids)
+                # First, ensure all these leads belong to the organization
+                rows = conn.execute(
+                    f"SELECT id FROM leads WHERE id IN ({placeholders}) AND organization_id = ?",
+                    (*lead_ids, organization_id),
+                ).fetchall()
+                
+                valid_ids = [dict_from_row(row)["id"] for row in rows]
+                
+                if not valid_ids:
+                    return {"success": True, "error": None, "data": {"deleted_count": 0}}
+                    
+                valid_placeholders = ",".join("?" for _ in valid_ids)
+                conn.execute(
+                    f"DELETE FROM leads WHERE id IN ({valid_placeholders})",
+                    valid_ids,
+                )
+                
+        return {"success": True, "error": None, "data": {"deleted_count": len(valid_ids), "deleted_ids": valid_ids}}
+    except Exception as e:
+        logger.error(f"Failed to bulk delete leads: {e}")
+        return {"success": False, "error": str(e), "data": None}

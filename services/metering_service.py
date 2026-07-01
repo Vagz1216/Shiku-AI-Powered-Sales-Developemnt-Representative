@@ -32,6 +32,12 @@ AGENT_ACTION_CREDITS = {
     "CalendarAgent": ("meeting_assist", 2),
 }
 
+ROUTING_MODE_CREDIT_MULTIPLIERS = {
+    "cost_optimized": 1,
+    "balanced": 2,
+    "quality_first": 4,
+}
+
 
 def set_current_user_id(user_id: int | None):
     return _current_user_id.set(int(user_id) if user_id else None)
@@ -172,6 +178,11 @@ def ensure_billing_period_snapshot(organization_id: int) -> dict[str, Any]:
 
 def action_defaults_for_agent(agent_name: str) -> tuple[str, int]:
     return AGENT_ACTION_CREDITS.get(agent_name, ("llm_agent_call", 1))
+
+
+def credits_for_routing_mode(base_credits: int, routing_mode: str | None) -> int:
+    multiplier = ROUTING_MODE_CREDIT_MULTIPLIERS.get(str(routing_mode or "").strip(), 1)
+    return max(int(base_credits), 0) * multiplier
 
 
 def record_ai_usage_action(

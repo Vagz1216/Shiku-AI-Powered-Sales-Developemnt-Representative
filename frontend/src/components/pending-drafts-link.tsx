@@ -33,10 +33,10 @@ export function PendingDraftsLink({ active = false, className }: PendingDraftsLi
       let request = draftCountInflight.get(selectedOrganizationId)
       if (!request) {
         request = (async () => {
-          const res = await fetchWithAuthRetry(getToken, orgUrl(`${API_BASE}/api/drafts`))
+          const res = await fetchWithAuthRetry(getToken, orgUrl(`${API_BASE}/api/drafts/count`))
           if (!res.ok) return cached?.count || 0
-          const data = (await res.json()) as { drafts?: unknown[] }
-          const nextCount = (data.drafts || []).length
+          const data = (await res.json()) as { count?: number }
+          const nextCount = Number(data.count || 0)
           draftCountCache.set(selectedOrganizationId, {
             count: nextCount,
             expiresAt: Date.now() + DRAFT_COUNT_CACHE_TTL_MS,

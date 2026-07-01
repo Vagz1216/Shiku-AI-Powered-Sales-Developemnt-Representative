@@ -37,6 +37,18 @@ def test_postgres_sql_helpers_switch_on_postgres_url(monkeypatch):
     assert "string_agg" in db_connection.sql_group_concat_distinct("provider")
 
 
+def test_stale_postgres_connection_error_detection():
+    assert db_connection._is_stale_postgres_connection_error(
+        RuntimeError("consuming input failed: SSL connection has been closed unexpectedly")
+    )
+    assert db_connection._is_stale_postgres_connection_error(
+        RuntimeError("server closed the connection unexpectedly")
+    )
+    assert not db_connection._is_stale_postgres_connection_error(
+        RuntimeError("relation app_users does not exist")
+    )
+
+
 def test_sql_helpers_keep_sqlite_defaults(monkeypatch):
     monkeypatch.setattr(db_connection, "_database_url", lambda: "sqlite:///./db/sdr.sqlite3")
 

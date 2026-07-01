@@ -34,6 +34,8 @@ CREATE TABLE IF NOT EXISTS subscription_plans (
     slug TEXT NOT NULL UNIQUE,
     description TEXT,
     monthly_price_cents INTEGER NOT NULL DEFAULT 0,
+    currency_code TEXT NOT NULL DEFAULT 'USD',
+    market_code TEXT NOT NULL DEFAULT 'GLOBAL',
     trial_days INTEGER NOT NULL DEFAULT 14,
     max_users INTEGER,
     max_campaigns INTEGER,
@@ -43,6 +45,12 @@ CREATE TABLE IF NOT EXISTS subscription_plans (
     max_monthly_ai_credits INTEGER,
     overage_allowed INTEGER NOT NULL DEFAULT 0 CHECK(overage_allowed IN (0,1)),
     overage_price_cents_per_ai_credit INTEGER,
+    allow_byok INTEGER NOT NULL DEFAULT 0 CHECK(allow_byok IN (0,1)),
+    byok_provider_mode TEXT NOT NULL DEFAULT 'platform_first' CHECK(byok_provider_mode IN ('platform_first','organization_first','organization_only')),
+    max_llm_credentials INTEGER,
+    allowed_llm_routing_modes TEXT NOT NULL DEFAULT 'cost_optimized,balanced,quality_first',
+    default_llm_routing_mode TEXT NOT NULL DEFAULT 'balanced' CHECK(default_llm_routing_mode IN ('cost_optimized','balanced','quality_first')),
+    trial_allowed_llm_routing_modes TEXT NOT NULL DEFAULT 'cost_optimized',
     active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP
@@ -144,6 +152,11 @@ CREATE TABLE IF NOT EXISTS mailbox_connections (
     resend_reply_to TEXT,
     resend_api_key_secret TEXT,
     resend_webhook_secret_secret TEXT,
+    oauth_access_token_secret TEXT,
+    oauth_refresh_token_secret TEXT,
+    oauth_token_expires_at TIMESTAMP,
+    oauth_scopes TEXT,
+    oauth_external_account_id TEXT,
     daily_limit INTEGER NOT NULL DEFAULT 100,
     last_sync_at TIMESTAMP,
     last_tested_at TIMESTAMP,
@@ -151,6 +164,27 @@ CREATE TABLE IF NOT EXISTS mailbox_connections (
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP,
     UNIQUE (organization_id, email_address)
+);
+
+CREATE TABLE IF NOT EXISTS organization_llm_credentials (
+    id SERIAL PRIMARY KEY,
+    organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL CHECK(provider IN ('openai','azure_openai','gemini','groq','cerebras','openrouter')),
+    label TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK(status IN ('ACTIVE','DISABLED')),
+    api_key_secret TEXT NOT NULL,
+    base_url TEXT,
+    azure_endpoint TEXT,
+    azure_deployment TEXT,
+    azure_api_version TEXT,
+    default_model TEXT,
+    created_by_user_id INTEGER REFERENCES app_users(id) ON DELETE SET NULL,
+    last_used_at TIMESTAMP,
+    last_tested_at TIMESTAMP,
+    last_error TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP,
+    UNIQUE (organization_id, provider, label)
 );
 
 INSERT INTO organizations (id, name, slug, status)
@@ -161,10 +195,23 @@ CREATE TABLE IF NOT EXISTS leads (
     id SERIAL PRIMARY KEY,
     organization_id INTEGER NOT NULL DEFAULT 1 REFERENCES organizations(id) ON DELETE CASCADE,
     email TEXT NOT NULL,
+    phone_number TEXT,
+    linkedin_url TEXT,
     name TEXT,
     company TEXT,
     industry TEXT,
     pain_points TEXT,
+    job_title TEXT,
+    seniority TEXT,
+    location TEXT,
+    company_size TEXT,
+    company_website TEXT,
+    company_description TEXT,
+    recent_activity TEXT,
+    enrichment_source TEXT,
+    enrichment_updated_at TIMESTAMP,
+    icp_score INTEGER,
+    icp_rationale TEXT,
     status TEXT NOT NULL DEFAULT 'NEW' CHECK(status IN ('NEW','CONTACTED','WARM','QUALIFIED','MEETING_PROPOSED','MEETING_BOOKED','COLD','OPTED_OUT')),
     email_opt_out INTEGER NOT NULL DEFAULT 0 CHECK(email_opt_out IN (0,1)),
     touch_count INTEGER NOT NULL DEFAULT 0,
@@ -172,6 +219,22 @@ CREATE TABLE IF NOT EXISTS leads (
     last_inbound_at TIMESTAMP,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     UNIQUE (organization_id, email)
+);
+
+CREATE TABLE IF NOT EXISTS lead_discovery_jobs (
+    id SERIAL PRIMARY KEY,
+    organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','RUNNING','COMPLETED','FAILED')),
+    candidates_found INTEGER NOT NULL DEFAULT 0,
+    leads_qualified INTEGER NOT NULL DEFAULT 0,
+    leads_imported INTEGER NOT NULL DEFAULT 0,
+    search_queries TEXT,
+    config TEXT,
+    error TEXT,
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS campaigns (
@@ -187,6 +250,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
     auto_approve_drafts INTEGER NOT NULL DEFAULT 0 CHECK(auto_approve_drafts IN (0,1)),
     auto_approve_monitor_replies INTEGER NOT NULL DEFAULT 0 CHECK(auto_approve_monitor_replies IN (0,1)),
     max_emails_per_lead INTEGER NOT NULL DEFAULT 5,
+    llm_routing_mode TEXT CHECK(llm_routing_mode IS NULL OR llm_routing_mode IN ('quality_first','balanced','cost_optimized')),
     UNIQUE (organization_id, name)
 );
 
@@ -250,10 +314,14 @@ CREATE TABLE IF NOT EXISTS email_messages (
     campaign_id INTEGER REFERENCES campaigns(id) ON DELETE SET NULL,
     sequence_step_id INTEGER REFERENCES campaign_sequence_steps(id) ON DELETE SET NULL,
     direction TEXT NOT NULL CHECK(direction IN ('inbound','outbound')),
+    channel TEXT NOT NULL DEFAULT 'email' CHECK(channel IN ('email','whatsapp','linkedin')),
     subject TEXT,
     body TEXT,
+    deep_link_url TEXT,
     status TEXT,
     intent TEXT,
+    selected_draft_type TEXT,
+    review_rationale TEXT,
     processed INTEGER NOT NULL DEFAULT 0 CHECK(processed IN (0,1)),
     approved INTEGER NOT NULL DEFAULT 0 CHECK(approved IN (0,1,-1)),
     approved_by TEXT,
@@ -341,6 +409,9 @@ CREATE TABLE IF NOT EXISTS llm_usage_events (
     estimated_cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
     pricing_source TEXT,
     pricing_version TEXT,
+    routing_mode TEXT,
+    billing_source TEXT NOT NULL DEFAULT 'platform' CHECK(billing_source IN ('platform','organization')),
+    provider_credential_id INTEGER REFERENCES organization_llm_credentials(id) ON DELETE SET NULL,
     fallback_triggered INTEGER NOT NULL DEFAULT 0 CHECK(fallback_triggered IN (0,1)),
     attempt_count INTEGER NOT NULL DEFAULT 1,
     tool_call_count INTEGER NOT NULL DEFAULT 0,
@@ -349,10 +420,20 @@ CREATE TABLE IF NOT EXISTS llm_usage_events (
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS platform_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_by_user_id INTEGER REFERENCES app_users(id) ON DELETE SET NULL,
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
 CREATE INDEX IF NOT EXISTS idx_app_users_clerk_user_id ON app_users(clerk_user_id);
 CREATE INDEX IF NOT EXISTS idx_app_users_email ON app_users(email);
 CREATE INDEX IF NOT EXISTS idx_organization_users_user_id ON organization_users(user_id);
+CREATE INDEX IF NOT EXISTS idx_organization_users_user_status_org ON organization_users(user_id, status, organization_id, role);
 CREATE INDEX IF NOT EXISTS idx_subscription_plans_active ON subscription_plans(active);
+CREATE INDEX IF NOT EXISTS idx_subscription_plans_market_currency ON subscription_plans(market_code, currency_code, active);
+CREATE INDEX IF NOT EXISTS idx_organization_subscriptions_org ON organization_subscriptions(organization_id);
 CREATE INDEX IF NOT EXISTS idx_organization_subscriptions_plan ON organization_subscriptions(plan_id);
 CREATE INDEX IF NOT EXISTS idx_organization_subscriptions_status ON organization_subscriptions(status);
 CREATE INDEX IF NOT EXISTS idx_billing_periods_org ON organization_billing_periods(organization_id, period_start, period_end);
@@ -362,10 +443,20 @@ CREATE INDEX IF NOT EXISTS idx_ai_usage_user ON ai_usage_actions(user_id, create
 CREATE INDEX IF NOT EXISTS idx_platform_usage_org_created ON platform_usage_events(organization_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_platform_cost_period ON platform_cost_allocations(period_start, period_end);
 CREATE INDEX IF NOT EXISTS idx_mailbox_connections_org ON mailbox_connections(organization_id);
+CREATE INDEX IF NOT EXISTS idx_org_llm_credentials_org_status ON organization_llm_credentials(organization_id, status);
 CREATE INDEX IF NOT EXISTS idx_campaigns_org ON campaigns(organization_id);
+CREATE INDEX IF NOT EXISTS idx_campaigns_org_status ON campaigns(organization_id, status);
 CREATE INDEX IF NOT EXISTS idx_leads_org_email ON leads(organization_id, email);
 CREATE INDEX IF NOT EXISTS idx_staff_org_email ON staff(organization_id, email);
 CREATE INDEX IF NOT EXISTS idx_email_messages_org ON email_messages(organization_id);
+CREATE INDEX IF NOT EXISTS idx_email_messages_org_status_review ON email_messages(organization_id, status, approved, direction, created_at);
+CREATE INDEX IF NOT EXISTS idx_email_messages_org_campaign_created ON email_messages(organization_id, campaign_id, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_email_messages_unique_campaign_first_touch
+ON email_messages(organization_id, campaign_id, lead_id)
+WHERE direction = 'outbound'
+  AND sequence_step_id IS NULL
+  AND campaign_id IS NOT NULL
+  AND UPPER(COALESCE(status, '')) IN ('DRAFT','SCHEDULED','SENT','GENERATING');
 CREATE INDEX IF NOT EXISTS idx_events_org ON events(organization_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_campaign_leads_lead_id ON campaign_leads(lead_id);
 CREATE INDEX IF NOT EXISTS idx_campaign_lead_contexts_lead ON campaign_lead_contexts(lead_id);
@@ -373,6 +464,7 @@ CREATE INDEX IF NOT EXISTS idx_campaign_staff_staff_id ON campaign_staff(staff_i
 CREATE INDEX IF NOT EXISTS idx_email_messages_lead_id ON email_messages(lead_id);
 CREATE INDEX IF NOT EXISTS idx_email_messages_processed ON email_messages(processed);
 CREATE INDEX IF NOT EXISTS idx_email_messages_scheduled ON email_messages(status, approved, scheduled_send_at);
+CREATE INDEX IF NOT EXISTS idx_email_messages_inbound_external ON email_messages(organization_id, direction, external_message_id);
 CREATE INDEX IF NOT EXISTS idx_email_attachments_message_id ON email_attachments(email_message_id);
 CREATE INDEX IF NOT EXISTS idx_meetings_lead_id ON meetings(lead_id);
 CREATE INDEX IF NOT EXISTS idx_sequence_steps_campaign ON campaign_sequence_steps(campaign_id, step_number);

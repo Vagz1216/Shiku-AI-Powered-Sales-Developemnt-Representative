@@ -16,6 +16,7 @@ export interface OrganizationCapabilities {
   can_manage_organization: boolean
   can_manage_users: boolean
   can_manage_mailboxes: boolean
+  can_manage_llm_credentials: boolean
   can_manage_staff: boolean
   can_manage_campaigns: boolean
   can_manage_leads: boolean
@@ -30,6 +31,8 @@ export interface SubscriptionPlan {
   slug: string
   description: string | null
   monthly_price_cents: number
+  currency_code: string
+  market_code: string
   trial_days: number
   max_users: number | null
   max_campaigns: number | null
@@ -39,6 +42,12 @@ export interface SubscriptionPlan {
   max_monthly_ai_credits: number | null
   overage_allowed: boolean
   overage_price_cents_per_ai_credit: number | null
+  allow_byok: boolean
+  byok_provider_mode: 'platform_first' | 'organization_first' | 'organization_only'
+  max_llm_credentials: number | null
+  allowed_llm_routing_modes: Array<'quality_first' | 'balanced' | 'cost_optimized'>
+  default_llm_routing_mode: 'quality_first' | 'balanced' | 'cost_optimized'
+  trial_allowed_llm_routing_modes: Array<'quality_first' | 'balanced' | 'cost_optimized'>
   active: boolean
   created_at: string
   updated_at: string | null
@@ -124,24 +133,29 @@ export function useTenantScope() {
       if (!tenantInflight || tenantInflightUserId !== userId) {
         tenantInflightUserId = userId
         tenantInflight = (async () => {
-          const res = await fetchWithAuthRetry(getToken, `${API_BASE}/api/me`)
-          if (!res.ok) {
-            return { organizations: [], selectedOrganizationId: null }
+          try {
+            const res = await fetchWithAuthRetry(getToken, `${API_BASE}/api/me`)
+            if (!res.ok) {
+              return cached || { organizations: [], selectedOrganizationId: null }
+            }
+            const data = await res.json() as { organizations?: TenantOrganization[] }
+            const orgs = data.organizations || []
+            const stored = Number(window.localStorage.getItem(STORAGE_KEY) || 0)
+            const selected = orgs.find(org => org.id === stored) || orgs[0] || null
+            const snapshot = {
+              organizations: orgs,
+              selectedOrganizationId: selected?.id || null,
+            }
+            tenantCache = {
+              userId,
+              expiresAt: Date.now() + TENANT_CACHE_TTL_MS,
+              snapshot,
+            }
+            return snapshot
+          } catch (error) {
+            console.warn('Could not load organizations from API', error)
+            return cached || { organizations: [], selectedOrganizationId: null }
           }
-          const data = await res.json() as { organizations?: TenantOrganization[] }
-          const orgs = data.organizations || []
-          const stored = Number(window.localStorage.getItem(STORAGE_KEY) || 0)
-          const selected = orgs.find(org => org.id === stored) || orgs[0] || null
-          const snapshot = {
-            organizations: orgs,
-            selectedOrganizationId: selected?.id || null,
-          }
-          tenantCache = {
-            userId,
-            expiresAt: Date.now() + TENANT_CACHE_TTL_MS,
-            snapshot,
-          }
-          return snapshot
         })().finally(() => {
           tenantInflight = null
           tenantInflightUserId = null
@@ -181,19 +195,21 @@ export function useTenantScope() {
     () => organizations.find(org => org.id === selectedOrganizationId) || organizations[0] || null,
     [organizations, selectedOrganizationId],
   )
+  const effectiveSelectedOrganizationId = selectedOrganization?.id || null
 
   const setSelectedOrganization = useCallback((organizationId: number) => {
+    if (!organizations.some(org => org.id === organizationId)) return
     setSelectedOrganizationId(organizationId)
     notifyOrganizationChanged(organizationId)
-  }, [])
+  }, [organizations])
 
-  const orgUrl = useCallback((url: string) => appendOrganizationParam(url, selectedOrganizationId), [selectedOrganizationId])
+  const orgUrl = useCallback((url: string) => appendOrganizationParam(url, effectiveSelectedOrganizationId), [effectiveSelectedOrganizationId])
 
   return {
     loading,
     organizations,
     selectedOrganization,
-    selectedOrganizationId,
+    selectedOrganizationId: effectiveSelectedOrganizationId,
     setSelectedOrganization,
     reloadOrganizations: loadOrganizations,
     orgUrl,

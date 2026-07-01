@@ -2,6 +2,8 @@
 
 import { useAuth } from '@clerk/clerk-react'
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { AppShell } from '@/components/app-shell'
 import { TenantOrganization, notifyOrganizationChanged, useTenantScope } from '@/components/tenant-scope'
 import { fetchWithAuthRetry } from '@/lib/auth-fetch'
@@ -35,8 +37,37 @@ function getErrorMessage(err: unknown, fallback: string) {
   return err instanceof Error ? err.message : fallback
 }
 
+function formatMoney(cents?: number | null, currency = 'USD') {
+  if (!cents) return 'Custom'
+  try {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency,
+      maximumFractionDigits: 0,
+    }).format(cents / 100)
+  } catch {
+    return `${currency} ${new Intl.NumberFormat('en-US').format(cents / 100)}`
+  }
+}
+
+function formatLimit(value?: number | null) {
+  return value ? new Intl.NumberFormat('en-US').format(value) : 'Unlimited'
+}
+
+function statusClass(status?: string) {
+  const normalized = (status || 'NONE').toUpperCase()
+  if (normalized === 'ACTIVE' || normalized === 'TRIALING') {
+    return 'bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-950 dark:text-emerald-300'
+  }
+  if (normalized === 'PAST_DUE' || normalized === 'SUSPENDED') {
+    return 'bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-950 dark:text-amber-300'
+  }
+  return 'bg-zinc-100 text-zinc-700 ring-zinc-600/20 dark:bg-zinc-800 dark:text-zinc-300'
+}
+
 export default function OrganizationPage() {
   const { isLoaded, userId, getToken } = useAuth()
+  const router = useRouter()
   const {
     loading,
     organizations,
@@ -61,6 +92,9 @@ export default function OrganizationPage() {
   const capabilities = selectedOrganization?.capabilities
   const canManageUsers = !!capabilities?.can_manage_users
   const canCreateOrganizations = organizations.some(org => org.current_user_role === 'system_owner')
+  const isSystemOwner = canCreateOrganizations
+  const activeOrganizations = organizations.filter(org => org.status === 'ACTIVE').length
+  const subscribedOrganizations = organizations.filter(org => org.subscription?.is_active).length
 
   const authedFetch = useCallback(async (url: string, init: RequestInit = {}) => {
     return fetchWithAuthRetry(getToken, url, init)
@@ -174,6 +208,16 @@ export default function OrganizationPage() {
     return [...platformRole, ...roleOptions]
   }, [organizations])
 
+  const chooseOrganization = (organizationId: number) => {
+    setSelectedOrganization(organizationId)
+    notifyOrganizationChanged(organizationId)
+  }
+
+  const manageOrganizationPlan = (organizationId: number) => {
+    chooseOrganization(organizationId)
+    router.push('/plans')
+  }
+
   if (!isLoaded || !userId || loading) {
     return <div className="flex min-h-screen items-center justify-center">Loading or unauthorized...</div>
   }
@@ -182,9 +226,13 @@ export default function OrganizationPage() {
     <AppShell active="organization">
       <main className="mx-auto w-full max-w-[96rem] p-6 lg:p-8">
         <div className="mb-6 flex flex-col gap-2">
-          <h1 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">Organization</h1>
+          <h1 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+            {isSystemOwner ? 'Platform Organizations' : 'Organization'}
+          </h1>
           <p className="text-sm text-zinc-500">
-            Select a tenant, manage users, and verify role boundaries before shared testing.
+            {isSystemOwner
+              ? 'Review tenants, select an organization for plan and user management, and create new customer workspaces.'
+              : 'Manage your organization profile, users, and tenant-level access.'}
           </p>
         </div>
 
@@ -194,10 +242,11 @@ export default function OrganizationPage() {
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
           <section className="space-y-4">
             <div className="rounded-lg border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-              <h2 className="text-base font-semibold">Active Tenant</h2>
+              <h2 className="text-base font-semibold">{isSystemOwner ? 'Selected Tenant' : 'Tenant Profile'}</h2>
               <select
                 value={selectedOrganizationId || ''}
-                onChange={(event) => setSelectedOrganization(Number(event.target.value))}
+                onChange={(event) => chooseOrganization(Number(event.target.value))}
+                disabled={!isSystemOwner && organizations.length <= 1}
                 className="mt-3 w-full rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"
               >
                 {organizations.map(org => (
@@ -208,9 +257,35 @@ export default function OrganizationPage() {
                 <div>Name: {selectedOrganization?.name || '-'}</div>
                 <div>Slug: {selectedOrganization?.slug || '-'}</div>
                 <div>Status: {selectedOrganization?.status || '-'}</div>
+                <div>Plan: {selectedOrganization?.subscription?.plan?.name || 'No plan'}</div>
+                <div>Subscription: {selectedOrganization?.subscription?.effective_status || 'NONE'}</div>
                 <div>Your role: {currentRole}</div>
               </div>
             </div>
+
+            {isSystemOwner && (
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+                  <div className="text-xs font-medium uppercase text-zinc-500">Tenants</div>
+                  <div className="mt-1 text-2xl font-semibold">{organizations.length}</div>
+                </div>
+                <div className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+                  <div className="text-xs font-medium uppercase text-zinc-500">Subscribed</div>
+                  <div className="mt-1 text-2xl font-semibold">{subscribedOrganizations}</div>
+                </div>
+                <div className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+                  <div className="text-xs font-medium uppercase text-zinc-500">Active</div>
+                  <div className="mt-1 text-2xl font-semibold">{activeOrganizations}</div>
+                </div>
+                <Link
+                  href="/plans"
+                  className="rounded-lg border border-zinc-200 bg-white p-4 text-sm font-medium shadow-sm hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:bg-zinc-800"
+                >
+                  <div className="text-xs font-medium uppercase text-zinc-500">Plan Console</div>
+                  <div className="mt-2">Assign plans</div>
+                </Link>
+              </div>
+            )}
 
             <div className="rounded-lg border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
               <h2 className="text-base font-semibold">Timezone</h2>
@@ -245,8 +320,86 @@ export default function OrganizationPage() {
           </section>
 
           <section className="space-y-6">
+            {isSystemOwner && (
+              <div className="rounded-lg border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+                <div className="flex items-center justify-between gap-3 border-b border-zinc-200 px-5 py-3 dark:border-zinc-800">
+                  <div>
+                    <div className="font-semibold">Tenant Directory</div>
+                    <div className="text-xs text-zinc-500">System-owner view across all customer organizations.</div>
+                  </div>
+                  <Link href="/plans" className="rounded-md border border-zinc-300 px-3 py-2 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800">
+                    Manage plans
+                  </Link>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[980px] text-left text-sm">
+                    <thead className="bg-zinc-50 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+                      <tr>
+                        <th className="px-4 py-3 font-medium">Organization</th>
+                        <th className="px-4 py-3 font-medium">Plan</th>
+                        <th className="px-4 py-3 font-medium">Subscription</th>
+                        <th className="px-4 py-3 font-medium">Limits</th>
+                        <th className="px-4 py-3 font-medium">Routing</th>
+                        <th className="px-4 py-3 font-medium">BYOK</th>
+                        <th className="px-4 py-3 font-medium">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
+                      {organizations.map(org => {
+                        const plan = org.subscription?.plan
+                        return (
+                          <tr key={org.id} className={org.id === selectedOrganizationId ? 'bg-zinc-50 dark:bg-zinc-800/60' : undefined}>
+                            <td className="px-4 py-3">
+                              <div className="font-medium">{org.name}</div>
+                              <div className="text-xs text-zinc-500">{org.slug} · {org.timezone}</div>
+                            </td>
+                            <td className="px-4 py-3">
+                              <div>{plan?.name || 'No plan'}</div>
+                              <div className="text-xs text-zinc-500">{plan ? formatMoney(plan.monthly_price_cents, plan.currency_code) : '-'}</div>
+                            </td>
+                            <td className="px-4 py-3">
+                              <span className={`inline-flex rounded-full px-2 py-1 text-xs font-medium ring-1 ring-inset ${statusClass(org.subscription?.effective_status)}`}>
+                                {org.subscription?.effective_status || 'NONE'}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-xs text-zinc-600 dark:text-zinc-300">
+                              <div>Users {formatLimit(plan?.max_users)}</div>
+                              <div>Leads {formatLimit(plan?.max_leads)}</div>
+                              <div>Emails {formatLimit(plan?.max_monthly_emails)}</div>
+                            </td>
+                            <td className="px-4 py-3 text-xs text-zinc-600 dark:text-zinc-300">
+                              <div>Default {plan?.default_llm_routing_mode?.replace('_', ' ') || '-'}</div>
+                              <div>{plan?.allowed_llm_routing_modes?.map(mode => mode.replace('_', ' ')).join(', ') || '-'}</div>
+                            </td>
+                            <td className="px-4 py-3 text-xs text-zinc-600 dark:text-zinc-300">
+                              <div>{plan?.allow_byok ? 'Allowed' : 'Not included'}</div>
+                              <div>{plan?.allow_byok ? `${plan.byok_provider_mode.replace('_', ' ')} · ${formatLimit(plan.max_llm_credentials)} keys` : '-'}</div>
+                            </td>
+                            <td className="px-4 py-3">
+                              <button
+                                type="button"
+                                onClick={() => manageOrganizationPlan(org.id)}
+                                className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                              >
+                                Assign plan
+                              </button>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
             <div className="rounded-lg border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-              <div className="border-b border-zinc-200 px-5 py-3 font-semibold dark:border-zinc-800">Members</div>
+              <div className="border-b border-zinc-200 px-5 py-3 dark:border-zinc-800">
+                <div className="font-semibold">Members</div>
+                <div className="text-xs text-zinc-500">
+                  {isSystemOwner ? `Selected tenant: ${selectedOrganization?.name || '-'}` : 'Users with access to this organization.'}
+                </div>
+              </div>
               {canManageUsers && (
                 <form onSubmit={upsertMember} className="grid grid-cols-1 gap-3 border-b border-zinc-200 p-5 dark:border-zinc-800 md:grid-cols-[minmax(0,1fr)_160px_140px_120px]">
                   <input value={memberEmail} onChange={e => setMemberEmail(e.target.value)} required type="email" placeholder="friend@example.com" className="rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" />

@@ -21,9 +21,21 @@ class LeadCreate(BaseModel):
 
     email: str = Field(description="Lead email address")
     name: str | None = None
+    phone_number: str | None = None
+    linkedin_url: str | None = None
     company: str | None = None
     industry: str | None = None
     pain_points: str | None = None
+    job_title: str | None = None
+    seniority: str | None = None
+    location: str | None = None
+    company_size: str | None = None
+    company_website: str | None = None
+    company_description: str | None = None
+    recent_activity: str | None = None
+    enrichment_source: str | None = None
+    icp_score: int | None = None
+    icp_rationale: str | None = None
     status: str = "NEW"
     email_opt_out: bool = False
     campaign_ids: list[int] = Field(default_factory=list)
@@ -50,9 +62,21 @@ class LeadUpdate(BaseModel):
 
     email: str | None = None
     name: str | None = None
+    phone_number: str | None = None
+    linkedin_url: str | None = None
     company: str | None = None
     industry: str | None = None
     pain_points: str | None = None
+    job_title: str | None = None
+    seniority: str | None = None
+    location: str | None = None
+    company_size: str | None = None
+    company_website: str | None = None
+    company_description: str | None = None
+    recent_activity: str | None = None
+    enrichment_source: str | None = None
+    icp_score: int | None = None
+    icp_rationale: str | None = None
     status: str | None = None
     email_opt_out: bool | None = None
     campaign_ids: list[int] | None = None

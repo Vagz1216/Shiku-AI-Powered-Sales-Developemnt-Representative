@@ -22,6 +22,7 @@ _CAMP_COLS = (
     "auto_approve_drafts",
     "auto_approve_monitor_replies",
     "max_emails_per_lead",
+    "llm_routing_mode",
 )
 
 
@@ -51,7 +52,14 @@ def _to_campaign_info(t: tuple) -> CampaignInfo:
         auto_approve_drafts=bool(t[9]),
         auto_approve_monitor_replies=bool(t[10]),
         max_emails_per_lead=t[11],
+        llm_routing_mode=t[12],
     )
+
+
+def _campaign_db_value(key: str, value):
+    if key in {"auto_approve_drafts", "auto_approve_monitor_replies"}:
+        return 1 if value else 0
+    return value
 
 
 def get_campaign_by_name(campaign_name: str, organization_id: int | None = None) -> Optional[CampaignInfo]:
@@ -120,9 +128,10 @@ def create_campaign(campaign: CampaignCreate, organization_id: int = 1) -> Optio
                 campaign.meeting_delay_days,
                 campaign.max_leads_per_campaign,
                 campaign.lead_selection_order,
-                campaign.auto_approve_drafts,
-                campaign.auto_approve_monitor_replies,
+                _campaign_db_value("auto_approve_drafts", campaign.auto_approve_drafts),
+                _campaign_db_value("auto_approve_monitor_replies", campaign.auto_approve_monitor_replies),
                 campaign.max_emails_per_lead,
+                campaign.llm_routing_mode,
             )
             if using_postgres():
                 cur = conn.execute(
@@ -130,11 +139,11 @@ def create_campaign(campaign: CampaignCreate, organization_id: int = 1) -> Optio
                     INSERT INTO campaigns (
                         organization_id, name, value_proposition, cta, status, meeting_delay_days,
                         max_leads_per_campaign, lead_selection_order, auto_approve_drafts,
-                        auto_approve_monitor_replies, max_emails_per_lead
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        auto_approve_monitor_replies, max_emails_per_lead, llm_routing_mode
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     RETURNING id, organization_id, name, value_proposition, cta, status, meeting_delay_days,
                         max_leads_per_campaign, lead_selection_order, auto_approve_drafts,
-                        auto_approve_monitor_replies, max_emails_per_lead
+                        auto_approve_monitor_replies, max_emails_per_lead, llm_routing_mode
                     """,
                     params,
                 )
@@ -147,8 +156,8 @@ def create_campaign(campaign: CampaignCreate, organization_id: int = 1) -> Optio
                 INSERT INTO campaigns (
                     organization_id, name, value_proposition, cta, status, meeting_delay_days,
                     max_leads_per_campaign, lead_selection_order, auto_approve_drafts,
-                    auto_approve_monitor_replies, max_emails_per_lead
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    auto_approve_monitor_replies, max_emails_per_lead, llm_routing_mode
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 params,
             )
@@ -166,6 +175,7 @@ def create_campaign(campaign: CampaignCreate, organization_id: int = 1) -> Optio
                 auto_approve_drafts=campaign.auto_approve_drafts,
                 auto_approve_monitor_replies=campaign.auto_approve_monitor_replies,
                 max_emails_per_lead=campaign.max_emails_per_lead,
+                llm_routing_mode=campaign.llm_routing_mode,
             )
     except Exception as e:
         logger.error(f"Error creating campaign: {e}")
@@ -184,7 +194,7 @@ def update_campaign(campaign_id: int, updates: CampaignUpdate, organization_id: 
 
         for key, value in update_dict.items():
             update_fields.append(f"{key} = ?")
-            update_values.append(value)
+            update_values.append(_campaign_db_value(key, value))
 
         update_values.append(campaign_id)
 
@@ -307,4 +317,5 @@ def get_campaign_tool(campaign_name: Optional[str] = None) -> CampaignInfo:
         auto_approve_drafts=False,
         auto_approve_monitor_replies=False,
         max_emails_per_lead=5,
+        llm_routing_mode=None,
     )

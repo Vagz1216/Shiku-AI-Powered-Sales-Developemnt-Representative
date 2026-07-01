@@ -1,4 +1,4 @@
-"""Content generation tools with 3 different writing styles."""
+"""Content generation tools with different writing styles and channels."""
 
 import logging
 from agents import function_tool
@@ -37,6 +37,15 @@ CONCISE_INSTRUCTIONS = """Write a brief, direct outreach email. Use:
 
 Structure: Brief greeting + direct value statement + clear CTA + simple signature (max 4-5 sentences total)"""
 
+# LinkedIn Instructions
+LINKEDIN_INSTRUCTIONS = """Write a connection request note (max 300 characters). 
+Be casual and authentic. No subject line.
+Use the provided recent activity as a natural conversation opener if it exists. 
+If no recent activity is provided, base your opener on their industry and role instead.
+CRITICAL: Do NOT fabricate or invent milestones, funding rounds, or posts. Only reference what is explicitly provided in the prompt."""
+
+# WhatsApp Instructions
+WHATSAPP_INSTRUCTIONS = """Write a friendly, 2-sentence WhatsApp message. Reference the emails we previously sent. Ask a simple yes/no qualification question."""
 
 @function_tool
 async def create_professional_email(name: str, value_proposition: str) -> OutreachEmailDraft:
@@ -146,4 +155,97 @@ Do not use any placeholder text like [Your Name] or [Company]. Write complete, r
         return OutreachEmailDraft(
             subject=f"{value_proposition} - Quick Question",
             body=f"Hi,\n\nCan we help {name} with {value_proposition.lower()}?\n\n5-minute call this week?\n\nBest,\nMike"
+        )
+
+
+async def create_linkedin_connection_note(campaign_name: str, value_proposition: str, lead_info: dict, context: str = "") -> OutreachEmailDraft:
+    """Generate a short LinkedIn connection request note for a target company.
+    
+    Args:
+        campaign_name: The name of the campaign
+        value_proposition: The specific value proposition for this outreach
+        lead_info: Dictionary containing lead details (name, company, recent_activity, etc)
+        context: Optional extra instructions or context for this sequence step
+        
+    Returns:
+        A LinkedIn message draft
+    """
+    lead_name = lead_info.get("name") or "there"
+    company = lead_info.get("company") or "your company"
+    recent_activity = lead_info.get("recent_activity")
+    job_title = lead_info.get("job_title")
+    industry = lead_info.get("industry")
+    
+    prompt = f"""Target: {lead_name} at {company}
+Role/Industry: {job_title or 'Unknown Role'} in {industry or 'Unknown Industry'}
+Value Proposition: {value_proposition}
+Recent Activity: {recent_activity or 'None available'}
+
+Create a connection request note (max 300 characters). 
+{f"Context/Instructions for this specific sequence step: {context}" if context else ""}
+
+Do not use any placeholder text like [Your Name] or [Company]. Write complete, ready-to-send content."""
+    
+    try:
+        result, provider = await run_agent_with_fallback(
+            name="LinkedInWriter",
+            instructions=LINKEDIN_INSTRUCTIONS,
+            prompt=prompt,
+            output_type=OutreachEmailDraft,
+            temperature=0.6,
+            max_tokens=150
+        )
+        logger.info(f"LinkedIn note generated using {provider}")
+        draft = result.final_output
+        draft.channel = "linkedin"
+        draft.subject = ""
+        return draft
+    except Exception as e:
+        logger.error(f"LinkedIn note generation failed: {e}")
+        return OutreachEmailDraft(
+            subject="",
+            body=f"Hi {name}, saw your recent updates and would love to connect. We help teams with {value_proposition.lower()}. Let's chat!",
+            channel="linkedin"
+        )
+
+
+async def create_whatsapp_message(name: str, value_proposition: str, context: str = "") -> OutreachEmailDraft:
+    """Generate a friendly WhatsApp message for a target company.
+    
+    Args:
+        name: The target company or contact name
+        value_proposition: The specific value proposition for this outreach
+        context: Optional extra instructions or context for this sequence step
+        
+    Returns:
+        A WhatsApp message draft
+    """
+    prompt = f"""Target: {name}
+Value Proposition: {value_proposition}
+
+Write a friendly, 2-sentence WhatsApp message. Reference the emails we previously sent. Ask a simple yes/no qualification question.
+{f"Context/Instructions for this specific sequence step: {context}" if context else ""}
+
+Do not use any placeholder text like [Your Name] or [Company]. Write complete, ready-to-send content."""
+    
+    try:
+        result, provider = await run_agent_with_fallback(
+            name="WhatsAppWriter",
+            instructions=WHATSAPP_INSTRUCTIONS,
+            prompt=prompt,
+            output_type=OutreachEmailDraft,
+            temperature=0.6,
+            max_tokens=150
+        )
+        logger.info(f"WhatsApp message generated using {provider}")
+        draft = result.final_output
+        draft.channel = "whatsapp"
+        draft.subject = ""
+        return draft
+    except Exception as e:
+        logger.error(f"WhatsApp message generation failed: {e}")
+        return OutreachEmailDraft(
+            subject="",
+            body=f"Hi {name}, just following up on my previous emails about {value_proposition.lower()}. Is this something you're currently exploring?",
+            channel="whatsapp"
         )

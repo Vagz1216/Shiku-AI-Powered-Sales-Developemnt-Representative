@@ -115,10 +115,14 @@ def pricing_version() -> str | None:
 
 
 def _provider_family(provider: str) -> str:
+    if provider.startswith("Org"):
+        provider = provider.removeprefix("Org")
     if provider.startswith("Groq"):
         return "Groq"
     if provider.startswith("Cerebras"):
         return "Cerebras"
+    if provider == "OpenRouter":
+        return "OpenRouter-Auto"
     return provider
 
 
@@ -172,6 +176,9 @@ def record_llm_usage(
     fallback_triggered: bool,
     attempt_count: int,
     tool_call_count: int,
+    routing_mode: str | None = None,
+    billing_source: str = "platform",
+    provider_credential_id: int | None = None,
     status: str = "success",
     error: str | None = None,
 ) -> dict[str, Any]:
@@ -181,9 +188,9 @@ def record_llm_usage(
             "INSERT INTO llm_usage_events ("
             "organization_id, user_id, ai_usage_action_id, request_id, agent_name, provider, model, input_tokens, output_tokens, "
             "cached_input_tokens, reasoning_output_tokens, total_tokens, request_count, "
-            "latency_ms, estimated_cost_usd, pricing_source, pricing_version, fallback_triggered, "
-            "attempt_count, tool_call_count, status, error"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "latency_ms, estimated_cost_usd, pricing_source, pricing_version, routing_mode, fallback_triggered, "
+            "billing_source, provider_credential_id, attempt_count, tool_call_count, status, error"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 organization_id or 1,
                 user_id,
@@ -202,7 +209,10 @@ def record_llm_usage(
                 estimated_cost_usd,
                 pricing_source,
                 pricing_version(),
+                routing_mode,
                 1 if fallback_triggered else 0,
+                billing_source,
+                provider_credential_id,
                 attempt_count,
                 tool_call_count,
                 status,
@@ -217,9 +227,21 @@ def record_llm_usage(
     }
 
 
-def get_usage_summary(limit: int = 100, organization_id: int | None = None) -> dict[str, Any]:
-    where = "WHERE organization_id = ?" if organization_id is not None else ""
-    params: tuple[Any, ...] = (organization_id,) if organization_id is not None else ()
+def get_usage_summary(
+    limit: int = 100,
+    organization_id: int | None = None,
+    routing_mode: str | None = None,
+) -> dict[str, Any]:
+    where_parts = []
+    params_list: list[Any] = []
+    if organization_id is not None:
+        where_parts.append("organization_id = ?")
+        params_list.append(organization_id)
+    if routing_mode:
+        where_parts.append("routing_mode = ?")
+        params_list.append(routing_mode)
+    where = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+    params: tuple[Any, ...] = tuple(params_list)
     with get_conn() as conn:
         total = dict_from_row(
             conn.execute(
@@ -258,9 +280,9 @@ def get_usage_summary(limit: int = 100, organization_id: int | None = None) -> d
         recent = [
             dict_from_row(row)
             for row in conn.execute(
-                "SELECT id, request_id, agent_name, provider, model, input_tokens, output_tokens, "
+                "SELECT id, request_id, agent_name, provider, model, routing_mode, input_tokens, output_tokens, "
                 "total_tokens, latency_ms, estimated_cost_usd, fallback_triggered, "
-                "pricing_source, attempt_count, tool_call_count, status, created_at "
+                "pricing_source, billing_source, provider_credential_id, attempt_count, tool_call_count, status, created_at "
                 f"FROM llm_usage_events {where} ORDER BY id DESC LIMIT ?",
                 (*params, limit),
             ).fetchall()
