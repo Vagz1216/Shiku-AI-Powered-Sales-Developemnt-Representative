@@ -415,12 +415,14 @@ export default function Home() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ campaign_id: campaignId, limit: 50 }),
+        body: JSON.stringify({ campaign_id: campaignId, limit: 200 }),
       })
       const data = await res.json()
       setOutreachLogs(prev => [...prev, withLogTimestamp({
         status: res.ok ? 'success' : 'error',
-        message: res.ok ? `Generated ${data.generated || 0} follow-up draft(s).` : (data.detail || 'Follow-up generation failed')
+        message: res.ok
+          ? `Generated ${data.generated || 0} follow-up draft(s); skipped ${data.skipped || 0}.`
+          : (data.detail || 'Follow-up generation failed')
       })])
       void refreshPendingDraftCount()
       void loadUpcomingFollowups()
