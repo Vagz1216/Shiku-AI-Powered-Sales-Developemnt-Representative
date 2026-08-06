@@ -45,7 +45,12 @@ If no recent activity is provided, base your opener on their industry and role i
 CRITICAL: Do NOT fabricate or invent milestones, funding rounds, or posts. Only reference what is explicitly provided in the prompt."""
 
 # WhatsApp Instructions
-WHATSAPP_INSTRUCTIONS = """Write a friendly, 2-sentence WhatsApp message. Reference the emails we previously sent. Ask a simple yes/no qualification question."""
+WHATSAPP_INSTRUCTIONS = """Write a friendly, concise WhatsApp outreach message.
+- If this is step 1, write it as an introduction and do not imply previous emails or prior outreach.
+- If this is step 2 or later, acknowledge the previous touch briefly without inventing channels that were not provided.
+- Use available lead-specific facts naturally, especially role, company, industry, pain points, recent activity, or ICP rationale.
+- Ask one simple yes/no qualification question.
+- Do not fabricate facts or use placeholders."""
 
 @function_tool
 async def create_professional_email(name: str, value_proposition: str) -> OutreachEmailDraft:
@@ -209,21 +214,54 @@ Do not use any placeholder text like [Your Name] or [Company]. Write complete, r
         )
 
 
-async def create_whatsapp_message(name: str, value_proposition: str, context: str = "") -> OutreachEmailDraft:
+async def create_whatsapp_message(
+    campaign_name: str,
+    value_proposition: str,
+    lead_info: dict | None = None,
+    *,
+    step_number: int = 1,
+    context: str = "",
+) -> OutreachEmailDraft:
     """Generate a friendly WhatsApp message for a target company.
     
     Args:
-        name: The target company or contact name
+        campaign_name: The name of the campaign
         value_proposition: The specific value proposition for this outreach
+        lead_info: Dictionary containing lead details for personalization
+        step_number: Current campaign sequence step number
         context: Optional extra instructions or context for this sequence step
         
     Returns:
         A WhatsApp message draft
     """
-    prompt = f"""Target: {name}
+    lead_info = lead_info or {}
+    lead_name = lead_info.get("name") or "there"
+    company = lead_info.get("company") or "your team"
+    job_title = lead_info.get("job_title") or "Unknown"
+    industry = lead_info.get("industry") or "Unknown"
+    pain_points = lead_info.get("pain_points") or "Unknown"
+    recent_activity = lead_info.get("recent_activity") or "None available"
+    icp_rationale = lead_info.get("icp_rationale") or "None available"
+    sequence_stage = "first touch" if step_number <= 1 else f"follow-up step {step_number}"
+    stage_rule = (
+        "This is the first touch. Do not say or imply that you are following up, checking back, or referencing earlier emails."
+        if step_number <= 1
+        else "This is a follow-up. Refer only to the previous campaign touch generally unless the step context names a specific channel."
+    )
+    prompt = f"""Campaign: {campaign_name}
+Sequence Stage: {sequence_stage}
+Stage Rule: {stage_rule}
+Target Lead: {lead_name} at {company}
+Role: {job_title}
+Industry: {industry}
+Pain Points: {pain_points}
+Recent Activity: {recent_activity}
+ICP Rationale: {icp_rationale}
 Value Proposition: {value_proposition}
 
-Write a friendly, 2-sentence WhatsApp message. Reference the emails we previously sent. Ask a simple yes/no qualification question.
+Write a friendly WhatsApp message of 1-2 short sentences.
+Personalize it using at least one concrete available lead/company detail above.
+Ask one simple yes/no qualification question.
 {f"Context/Instructions for this specific sequence step: {context}" if context else ""}
 
 Do not use any placeholder text like [Your Name] or [Company]. Write complete, ready-to-send content."""
@@ -244,8 +282,18 @@ Do not use any placeholder text like [Your Name] or [Company]. Write complete, r
         return draft
     except Exception as e:
         logger.error(f"WhatsApp message generation failed: {e}")
+        if step_number <= 1:
+            body = (
+                f"Hi {lead_name}, I noticed {company} may be focused on {pain_points.lower()}. "
+                f"Would improving this with {value_proposition.lower()} be worth a quick look?"
+            )
+        else:
+            body = (
+                f"Hi {lead_name}, quick follow-up on {value_proposition.lower()} for {company}. "
+                "Is this still relevant to your team?"
+            )
         return OutreachEmailDraft(
             subject="",
-            body=f"Hi {name}, just following up on my previous emails about {value_proposition.lower()}. Is this something you're currently exploring?",
+            body=body,
             channel="whatsapp"
         )

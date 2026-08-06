@@ -163,8 +163,17 @@ def test_claim_next_outreach_touch_is_campaign_lead_idempotent(tmp_path, monkeyp
     with _connect(db_path) as conn:
         conn.executescript(
             """
-            CREATE TABLE leads (id INTEGER, status TEXT, touch_count INTEGER);
-            INSERT INTO leads VALUES (7, 'NEW', 0);
+            CREATE TABLE leads (id INTEGER, status TEXT, touch_count INTEGER, email_opt_out INTEGER);
+            INSERT INTO leads VALUES (7, 'NEW', 0, 0);
+
+            CREATE TABLE campaign_leads (
+                campaign_id INTEGER,
+                lead_id INTEGER,
+                responded INTEGER,
+                meeting_booked INTEGER,
+                emails_sent INTEGER
+            );
+            INSERT INTO campaign_leads VALUES (42, 7, 0, 0, 0);
             
             CREATE TABLE email_messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -223,3 +232,94 @@ def test_claim_next_outreach_touch_is_campaign_lead_idempotent(tmp_path, monkeyp
     assert first["claimed"] is True
     assert second["claimed"] is False
     assert "No eligible sequence step found" in second["error"]
+
+
+def test_claim_next_outreach_touch_uses_step_number_not_step_row_id(tmp_path, monkeypatch):
+    db_path = tmp_path / "outreach-next-step.sqlite3"
+    with _connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE leads (id INTEGER, status TEXT, touch_count INTEGER, email_opt_out INTEGER);
+            INSERT INTO leads VALUES (7, 'CONTACTED', 1, 0);
+
+            CREATE TABLE campaign_leads (
+                campaign_id INTEGER,
+                lead_id INTEGER,
+                responded INTEGER,
+                meeting_booked INTEGER,
+                emails_sent INTEGER
+            );
+            INSERT INTO campaign_leads VALUES (42, 7, 0, 0, 1);
+
+            CREATE TABLE email_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                organization_id INTEGER NOT NULL,
+                lead_id INTEGER NOT NULL,
+                campaign_id INTEGER,
+                sequence_step_id INTEGER,
+                direction TEXT NOT NULL,
+                subject TEXT,
+                body TEXT,
+                status TEXT,
+                processed INTEGER NOT NULL DEFAULT 0,
+                approved INTEGER NOT NULL DEFAULT 0,
+                channel TEXT,
+                created_at TEXT,
+                sent_at TEXT
+            );
+
+            CREATE TABLE campaign_sequences (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                campaign_id INTEGER,
+                step_number INTEGER,
+                channel TEXT,
+                delay_days INTEGER,
+                prompt_context TEXT
+            );
+            INSERT INTO campaign_sequences (campaign_id, step_number, channel, delay_days)
+            VALUES (42, 1, 'whatsapp', 0), (42, 2, 'email', 0);
+
+            CREATE TABLE campaign_sequence_steps (
+                id INTEGER PRIMARY KEY,
+                campaign_id INTEGER,
+                step_number INTEGER,
+                delay_days INTEGER,
+                subject_template TEXT,
+                body_template TEXT,
+                active INTEGER,
+                created_at TEXT
+            );
+            INSERT INTO campaign_sequence_steps (id, campaign_id, step_number, delay_days, active)
+            VALUES (37, 42, 1, 0, 1), (38, 42, 2, 0, 1);
+
+            INSERT INTO email_messages (
+                organization_id, lead_id, campaign_id, sequence_step_id, direction,
+                subject, body, status, processed, approved, channel, created_at, sent_at
+            ) VALUES (
+                1, 7, 42, 37, 'outbound',
+                '', 'Sent WhatsApp', 'SENT', 1, 1, 'whatsapp',
+                '2000-01-01T00:00:00Z', '2000-01-01T00:00:00Z'
+            );
+            """
+        )
+
+    monkeypatch.setattr(marketing_agent, "get_conn", lambda: _connect(db_path))
+
+    result = marketing_agent._claim_next_outreach_touch(
+        organization_id=1,
+        campaign_id=42,
+        lead_id=7,
+        lead_email="gabrielle@example.com",
+    )
+
+    assert result["claimed"] is True
+    assert result["step"]["step_number"] == 2
+    assert result["step"]["channel"] == "email"
+
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT sequence_step_id, channel, status FROM email_messages WHERE status = 'GENERATING'"
+        ).fetchone()
+
+    assert row["sequence_step_id"] == 38
+    assert row["channel"] == "email"

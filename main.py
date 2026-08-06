@@ -49,6 +49,7 @@ from utils.auth import get_current_user, get_current_user_or_cron
 from services import (
     analytics_service,
     audit_service,
+    campaign_context_service,
     crm_service,
     draft_service,
     lead_service,
@@ -1605,6 +1606,12 @@ class CampaignLeadAssignmentRequest(BaseModel):
     lead_ids: List[int]
 
 
+class CampaignLeadResponseRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    responded: bool
+
+
 @app.put("/api/campaigns/{campaign_id}/leads")
 async def replace_campaign_leads(
     campaign_id: int,
@@ -1650,6 +1657,34 @@ async def replace_campaign_leads(
         raise
     except Exception as e:
         logger.error(f"Failed to update campaign leads for {campaign_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/campaigns/{campaign_id}/leads/{lead_id}/response")
+async def update_campaign_lead_response(
+    campaign_id: int,
+    lead_id: int,
+    request: CampaignLeadResponseRequest,
+    user: dict = Depends(get_current_user),
+    organization_id: Optional[int] = None,
+):
+    """Mark whether a lead responded in this campaign, without changing global lead status."""
+    try:
+        resolved_org_id = _workflow_org_id(user, organization_id, tenant_service.WORKFLOW_ROLES)
+        result = campaign_context_service.set_campaign_lead_responded(
+            organization_id=resolved_org_id,
+            campaign_id=campaign_id,
+            lead_id=lead_id,
+            responded=request.responded,
+            actor_id=str(user.get("sub") or user.get("email") or ""),
+        )
+        return {"status": "success", "lead": result}
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update campaign lead response for campaign={campaign_id} lead={lead_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -3060,9 +3095,13 @@ async def stream_outreach(
             # Helper to yield SSE events
             async def sse_callback(status: str, message: str):
                 nonlocal terminal_sent
-                if status in {"success", "error"}:
+                is_terminal = (
+                    message.startswith("Campaign finished:")
+                    or message.startswith("Campaign execution error:")
+                )
+                if is_terminal:
                     terminal_sent = True
-                data = json.dumps({"status": status, "message": message})
+                data = json.dumps({"status": status, "message": message, "terminal": is_terminal})
                 # Note: We need to use a non-blocking yield here, but since this is 
                 # called from within the orchestrator, we'll use a queue or 
                 # just yield directly if possible.
@@ -3097,11 +3136,11 @@ async def stream_outreach(
             if not terminal_sent:
                 status = "success" if result.get("success") else "error"
                 message = result.get("message") or result.get("error") or "Outreach run finished."
-                yield f"data: {json.dumps({'status': status, 'message': message})}\n\n"
+                yield f"data: {json.dumps({'status': status, 'message': message, 'terminal': True})}\n\n"
                 
         except Exception as e:
             logger.error(f"Streaming outreach failed: {e}")
-            yield f"data: {json.dumps({'status': 'error', 'message': str(e)})}\n\n"
+            yield f"data: {json.dumps({'status': 'error', 'message': str(e), 'terminal': True})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 

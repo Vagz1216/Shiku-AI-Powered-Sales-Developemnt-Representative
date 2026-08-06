@@ -187,12 +187,14 @@ def generate_due_followup_drafts(campaign_id: int | None = None, limit: int = 50
             "c.max_emails_per_lead, l.id AS lead_id, l.email, l.name, l.company, l.industry, "
             "l.pain_points, l.status, l.last_contacted_at, cl.emails_sent, cl.responded, cl.meeting_booked, "
             "s.id AS sequence_step_id, s.step_number, s.delay_days, s.subject_template, s.body_template, "
+            "COALESCE(cs.channel, 'email') AS channel, cs.prompt_context, "
             "ctx.last_outbound_subject, ctx.last_outbound_summary, ctx.last_inbound_subject, "
             "ctx.last_inbound_summary, ctx.latest_intent "
             "FROM campaign_leads cl "
             "JOIN campaigns c ON c.id = cl.campaign_id "
             "JOIN leads l ON l.id = cl.lead_id "
-            "JOIN campaign_sequence_steps s ON s.campaign_id = c.id AND s.step_number = cl.emails_sent "
+            "JOIN campaign_sequence_steps s ON s.campaign_id = c.id AND s.step_number = cl.emails_sent + 1 "
+            "LEFT JOIN campaign_sequences cs ON cs.campaign_id = c.id AND cs.step_number = s.step_number "
             "LEFT JOIN campaign_lead_contexts ctx ON ctx.campaign_id = c.id AND ctx.lead_id = l.id "
             f"WHERE c.status = 'ACTIVE' AND s.active = {sql_bool_true()} AND l.email_opt_out = {sql_bool_false()} "
             f"AND l.status != 'OPTED_OUT' AND cl.responded = {sql_bool_false()} AND cl.meeting_booked = {sql_bool_false()} "
@@ -229,18 +231,20 @@ def generate_due_followup_drafts(campaign_id: int | None = None, limit: int = 50
                     "context_hint": _context_hint(item),
                 }
                 subject = _render(item.get("subject_template") or "Re: {campaign_name}", context)
+                channel = str(item.get("channel") or "email").lower()
                 body = _render(item.get("body_template") or DEFAULT_SEQUENCE_STEPS[0]["body_template"], context)
-                body = body + quick_replies_for_followup(
-                    subject,
-                    lead_email=item["email"],
-                    campaign_id=item["campaign_id"],
-                    organization_id=item["organization_id"],
-                )
+                if channel == "email":
+                    body = body + quick_replies_for_followup(
+                        subject,
+                        lead_email=item["email"],
+                        campaign_id=item["campaign_id"],
+                        organization_id=item["organization_id"],
+                    )
                 cur = conn.execute(
                     "INSERT INTO email_messages "
-                    "(organization_id, lead_id, campaign_id, sequence_step_id, direction, subject, body, status, processed, approved, created_at) "
-                    "VALUES (?, ?, ?, ?, 'outbound', ?, ?, 'DRAFT', 1, 0, ?)",
-                    (item["organization_id"], item["lead_id"], item["campaign_id"], item["sequence_step_id"], subject, body, _now_iso()),
+                    "(organization_id, lead_id, campaign_id, sequence_step_id, direction, subject, body, status, processed, approved, created_at, channel) "
+                    "VALUES (?, ?, ?, ?, 'outbound', ?, ?, 'DRAFT', 1, 0, ?, ?)",
+                    (item["organization_id"], item["lead_id"], item["campaign_id"], item["sequence_step_id"], subject, body, _now_iso(), channel),
                 )
                 campaign_context_service.record_outbound(
                     conn,
@@ -258,6 +262,7 @@ def generate_due_followup_drafts(campaign_id: int | None = None, limit: int = 50
                         "campaign_id": item["campaign_id"],
                         "sequence_step_id": item["sequence_step_id"],
                         "step_number": item["step_number"],
+                        "channel": channel,
                     }
                 )
             if generated:
@@ -296,11 +301,12 @@ def list_upcoming_followups(campaign_id: int | None = None, limit: int = 100, or
         rows = conn.execute(
             "SELECT c.id AS campaign_id, c.name AS campaign_name, l.id AS lead_id, l.email, l.name, "
             "l.company, l.status, l.last_contacted_at, cl.emails_sent, cl.responded, cl.meeting_booked, "
-            "s.id AS sequence_step_id, s.step_number, s.delay_days "
+            "s.id AS sequence_step_id, s.step_number, s.delay_days, COALESCE(cs.channel, 'email') AS channel "
             "FROM campaign_leads cl "
             "JOIN campaigns c ON c.id = cl.campaign_id "
             "JOIN leads l ON l.id = cl.lead_id "
-            "JOIN campaign_sequence_steps s ON s.campaign_id = c.id AND s.step_number = cl.emails_sent "
+            "JOIN campaign_sequence_steps s ON s.campaign_id = c.id AND s.step_number = cl.emails_sent + 1 "
+            "LEFT JOIN campaign_sequences cs ON cs.campaign_id = c.id AND cs.step_number = s.step_number "
             f"WHERE c.status = 'ACTIVE' AND s.active = {sql_bool_true()} AND l.email_opt_out = {sql_bool_false()} "
             f"AND l.status != 'OPTED_OUT' AND cl.responded = {sql_bool_false()} AND cl.meeting_booked = {sql_bool_false()} "
             "AND cl.emails_sent < c.max_emails_per_lead "

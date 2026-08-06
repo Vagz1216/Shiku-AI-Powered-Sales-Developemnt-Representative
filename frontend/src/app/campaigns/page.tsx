@@ -143,6 +143,7 @@ export default function CampaignsPage() {
   const [campaignLeads, setCampaignLeads] = useState<CampaignLead[]>([])
   const [selectedLeadIds, setSelectedLeadIds] = useState<number[]>([])
   const [leadsSaving, setLeadsSaving] = useState(false)
+  const [responseUpdatingLeadId, setResponseUpdatingLeadId] = useState<number | null>(null)
   const [isSequenceModalOpen, setIsSequenceModalOpen] = useState(false)
   const [sequenceCampaign, setSequenceCampaign] = useState<Campaign | null>(null)
   const [sequenceSteps, setSequenceSteps] = useState<SequenceStep[]>([])
@@ -374,6 +375,32 @@ export default function CampaignsPage() {
       setFeedback({ type: 'error', message: getErrorMessage(err, 'Failed to save lead assignments') })
     } finally {
       setLeadsSaving(false)
+    }
+  }
+
+  const updateCampaignLeadResponse = async (lead: CampaignLead, responded: boolean) => {
+    if (!leadCampaign || !canManageCampaigns || !lead.assigned) return
+    try {
+      setResponseUpdatingLeadId(lead.id)
+      const res = await authedFetch(orgUrl(`${API_BASE}/api/campaigns/${leadCampaign.id}/leads/${lead.id}/response`), {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ responded })
+      })
+      if (!res.ok) throw new Error('Failed to update response state')
+      setCampaignLeads(current => current.map(item => (
+        item.id === lead.id ? { ...item, responded: responded ? 1 : 0 } : item
+      )))
+      setFeedback({
+        type: 'success',
+        message: `${lead.name || lead.email} ${responded ? 'marked as responded for' : 'reopened in'} ${leadCampaign.name}.`,
+      })
+    } catch (err: unknown) {
+      setFeedback({ type: 'error', message: getErrorMessage(err, 'Failed to update response state') })
+    } finally {
+      setResponseUpdatingLeadId(null)
     }
   }
 
@@ -816,26 +843,54 @@ export default function CampaignsPage() {
             </div>
             <div className="p-6 overflow-y-auto flex-1">
               <p className="text-sm text-zinc-600 dark:text-zinc-400 mb-4">
-                Select which leads belong to this campaign. Only selected leads are eligible for outreach.
+                Select which leads belong to this campaign. Mark manual WhatsApp or LinkedIn replies as responded to stop later automated touches for this campaign only.
               </p>
               <div className="space-y-2">
                 {campaignLeads.map(lead => (
-                  <label key={lead.id} className="flex items-start gap-3 p-3 border rounded-md border-zinc-200 dark:border-zinc-700 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={selectedLeadIds.includes(lead.id)}
-                      onChange={() => toggleLeadSelection(lead.id)}
-                      className="mt-1"
-                    />
-                    <div className="text-sm">
-                      <div className="font-medium text-zinc-900 dark:text-zinc-100">
-                        {lead.name} &lt;{lead.email}&gt;
+                  <div key={lead.id} className="flex items-start justify-between gap-3 p-3 border rounded-md border-zinc-200 dark:border-zinc-700">
+                    <label className="flex min-w-0 flex-1 items-start gap-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={selectedLeadIds.includes(lead.id)}
+                        onChange={() => toggleLeadSelection(lead.id)}
+                        className="mt-1"
+                      />
+                      <div className="min-w-0 text-sm">
+                        <div className="font-medium text-zinc-900 dark:text-zinc-100">
+                          {lead.name} &lt;{lead.email}&gt;
+                        </div>
+                        <div className="text-zinc-600 dark:text-zinc-400">
+                          {lead.company || 'No company'} | status: {lead.status} | touches: {lead.touch_count} | sent: {lead.emails_sent}
+                        </div>
+                        <div className="mt-1 flex flex-wrap gap-2 text-xs">
+                          {lead.responded ? (
+                            <span className="rounded bg-emerald-100 px-2 py-1 font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">Responded</span>
+                          ) : (
+                            <span className="rounded bg-zinc-100 px-2 py-1 font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">No response marked</span>
+                          )}
+                          {lead.meeting_booked ? (
+                            <span className="rounded bg-sky-100 px-2 py-1 font-medium text-sky-700 dark:bg-sky-900/30 dark:text-sky-300">Meeting booked</span>
+                          ) : null}
+                        </div>
                       </div>
-                      <div className="text-zinc-600 dark:text-zinc-400">
-                        {lead.company || 'No company'} | status: {lead.status} | touches: {lead.touch_count} | sent: {lead.emails_sent}
-                      </div>
-                    </div>
-                  </label>
+                    </label>
+                    <button
+                      type="button"
+                      disabled={!canManageCampaigns || !lead.assigned || responseUpdatingLeadId === lead.id}
+                      onClick={() => updateCampaignLeadResponse(lead, !lead.responded)}
+                      className={`shrink-0 rounded-md px-3 py-1.5 text-xs font-medium disabled:opacity-50 ${
+                        lead.responded
+                          ? 'border border-zinc-300 text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800'
+                          : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                      }`}
+                    >
+                      {responseUpdatingLeadId === lead.id
+                        ? 'Saving...'
+                        : lead.responded
+                          ? 'Unmark responded'
+                          : 'Mark responded'}
+                    </button>
+                  </div>
                 ))}
                 {campaignLeads.length === 0 && (
                   <p className="text-zinc-500 text-sm">No leads found.</p>

@@ -64,6 +64,15 @@ async def run_drafter_agent(campaign_info: Dict[str, Any], lead_info: Dict[str, 
     - Company: {lead_info['company']}
     - Industry: {lead_info.get('industry', 'Unknown')}
     - Pain Points: {lead_info.get('pain_points', 'Unknown')}
+    - Job Title: {lead_info.get('job_title') or 'Unknown'}
+    - Seniority: {lead_info.get('seniority') or 'Unknown'}
+    - Location: {lead_info.get('location') or 'Unknown'}
+    - Company Size: {lead_info.get('company_size') or 'Unknown'}
+    - Company Website: {lead_info.get('company_website') or 'Unknown'}
+    - Company Description: {lead_info.get('company_description') or 'Unknown'}
+    - Recent Activity: {lead_info.get('recent_activity') or 'None available'}
+    - ICP Score: {lead_info.get('icp_score') if lead_info.get('icp_score') is not None else 'Unknown'}
+    - ICP Rationale: {lead_info.get('icp_rationale') or 'None available'}
     - Total Touch Count: {lead_info.get('touch_count', 0)}
     - Emails Sent In This Campaign: {lead_info.get('emails_sent', 0)}
     - Has Responded Before: {bool(lead_info.get('responded', 0))}
@@ -79,6 +88,12 @@ async def run_drafter_agent(campaign_info: Dict[str, Any], lead_info: Dict[str, 
     - If Emails Sent In This Campaign is 0: treat as first-touch outreach.
     - If Emails Sent In This Campaign is 1 or more: treat as follow-up and avoid repeating identical opener/CTA.
     - For follow-up, include one new angle (e.g., quantified benefit, relevant use case, or pain-point reframing).
+
+    Personalization rules:
+    - Use at least two concrete lead/company-specific facts when available, such as job title, seniority, industry, recent activity, company description, pain points, or ICP rationale.
+    - Do not write generic same-template copy where only the name/company changes.
+    - Do not fabricate missing facts; if a field is unknown, ignore it.
+    - Adapt the value proposition to the lead's role, company context, and pain points.
     
     CRITICAL INSTRUCTION:
     - Do NOT use any bracketed placeholders like [Your Name], [Company], [Sender], etc.
@@ -121,8 +136,14 @@ async def run_reviewer_agent(campaign_info: Dict[str, Any], lead_info: Dict[str,
     Sender Name: {campaign_info.get('sender_name', settings.outreach_sender_name)}
     Sender Company: {campaign_info.get('sender_company', settings.outreach_sender_company)}
     Lead Name: {lead_info['name']}
+    Lead Company: {lead_info.get('company', 'Unknown')}
+    Lead Job Title: {lead_info.get('job_title') or 'Unknown'}
+    Lead Seniority: {lead_info.get('seniority') or 'Unknown'}
     Lead Industry: {lead_info.get('industry', 'Unknown')}
     Lead Pain Points: {lead_info.get('pain_points', 'Unknown')}
+    Lead Recent Activity: {lead_info.get('recent_activity') or 'None available'}
+    Lead Company Description: {lead_info.get('company_description') or 'Unknown'}
+    Lead ICP Rationale: {lead_info.get('icp_rationale') or 'None available'}
     Emails Sent In Campaign So Far: {lead_info.get('emails_sent', 0)}
     
     Drafts to Evaluate:
@@ -142,6 +163,7 @@ async def run_reviewer_agent(campaign_info: Dict[str, Any], lead_info: Dict[str,
     Select the BEST draft for this specific lead. Consider their industry and pain points. 
     Ensure the email directly addresses their pain points using the value proposition.
     Ensure the draft is appropriate for the outreach stage (first-touch vs follow-up).
+    Prefer the draft that uses the strongest available lead-specific facts without inventing facts.
     
     CRITICAL INSTRUCTION:
     - The final selected body MUST NOT contain any placeholders like [Your Name], [Company], etc.

@@ -44,17 +44,21 @@ def _find_next_sequence_step(conn, organization_id: int, campaign_id: int, lead_
     lead_row = conn.execute("SELECT email_opt_out FROM leads WHERE id = ?", (lead_id,)).fetchone()
     if not lead_row:
         return None
-    lead = dict_from_row(lead_row)
-    if lead.get("email_opt_out"):
+    try:
+        email_opt_out = lead_row["email_opt_out"]
+    except (KeyError, TypeError, IndexError):
+        email_opt_out = lead_row[0]
+    if email_opt_out:
         return None  # Hard stop: lead has opted out globally
 
     # 1b. Check campaign-scoped halt signals — isolated per (campaign_id, lead_id)
     cl_row = conn.execute(
-        "SELECT responded, meeting_booked FROM campaign_leads WHERE campaign_id = ? AND lead_id = ?",
+        "SELECT responded, meeting_booked, emails_sent FROM campaign_leads WHERE campaign_id = ? AND lead_id = ?",
         (campaign_id, lead_id),
     ).fetchone()
-    if cl_row:
-        cl = dict_from_row(cl_row)
+    cl = dict_from_row(cl_row) if cl_row else {}
+    campaign_touch_count = int(cl.get("emails_sent") or 0)
+    if cl:
         if cl.get("meeting_booked"):
             return None  # Meeting already booked in this campaign
         if cl.get("responded"):
@@ -62,10 +66,17 @@ def _find_next_sequence_step(conn, organization_id: int, campaign_id: int, lead_
 
     # 2. Get all active touches for this campaign/lead
     touches = [dict_from_row(r) for r in conn.execute(
-        "SELECT id, status, channel, created_at, sent_at, sequence_step_id FROM email_messages "
-        "WHERE organization_id = ? AND campaign_id = ? AND lead_id = ? AND direction = 'outbound' "
-        "AND status NOT IN ('FAILED', 'REJECTED') "
-        "ORDER BY created_at ASC",
+        "SELECT em.id, em.status, em.channel, em.created_at, em.sent_at, em.sequence_step_id, "
+        "step.step_number AS message_step_number, "
+        "(SELECT MIN(seq.step_number) FROM campaign_sequences seq "
+        " WHERE seq.campaign_id = em.campaign_id "
+        " AND LOWER(COALESCE(seq.channel, 'email')) = LOWER(COALESCE(em.channel, 'email'))) "
+        "AS inferred_channel_step_number "
+        "FROM email_messages em "
+        "LEFT JOIN campaign_sequence_steps step ON step.id = em.sequence_step_id "
+        "WHERE em.organization_id = ? AND em.campaign_id = ? AND em.lead_id = ? AND em.direction = 'outbound' "
+        "AND em.status NOT IN ('FAILED', 'REJECTED') "
+        "ORDER BY em.created_at ASC",
         (organization_id, campaign_id, lead_id)
     ).fetchall()]
 
@@ -75,8 +86,16 @@ def _find_next_sequence_step(conn, organization_id: int, campaign_id: int, lead_
         if last_touch.get("status", "").upper() != "SENT":
             return None # e.g. DRAFT or GENERATING
         
-        # Calculate current step (fallback to len(touches) if sequence_step_id is NULL)
-        current_step = last_touch.get("sequence_step_id") or len(touches)
+        # sequence_step_id stores the campaign_sequence_steps row id, not the
+        # step number. Older omnichannel drafts may not have it, so infer from
+        # the configured channel order before falling back to sent touch count.
+        sent_touches = [touch for touch in touches if touch.get("status", "").upper() == "SENT"]
+        current_step = (
+            last_touch.get("message_step_number")
+            or campaign_touch_count
+            or last_touch.get("inferred_channel_step_number")
+            or len(sent_touches)
+        )
         next_step_num = current_step + 1
         
         # Check if enough time has passed
@@ -143,7 +162,7 @@ def _claim_next_outreach_touch(
                         f"Generating {next_step['channel']} outreach",
                         f"Reserved step {next_step['step_number']} generation for {lead_email or 'lead'}.",
                         _now_iso(),
-                        next_step.get("sequence_step_id") or next_step["step_number"],
+                        next_step.get("sequence_step_id"),
                         next_step["channel"],
                     ),
                 )
@@ -280,13 +299,14 @@ class OutreachOrchestrator:
                 # 2. Get campaign-scoped eligible leads
                 requested_max = campaign.max_leads_per_campaign or settings.max_leads_per_campaign
                 batch_size = max(1, min(requested_max, settings.max_leads_per_campaign))
-                msg = f"Fetching up to {batch_size} eligible lead(s) for campaign: {campaign.name}..."
+                candidate_limit = max(batch_size, min(batch_size * 4, 500))
+                msg = f"Fetching candidates for up to {batch_size} eligible lead touch(es) for campaign: {campaign.name}..."
                 logger.info(msg)
                 if callback: await callback("info", msg)
                 
                 lead_res = lead_service.get_leads(
                     campaign_id=campaign.id,
-                    max_leads=batch_size,
+                    max_leads=candidate_limit,
                     order_by=campaign.lead_selection_order,
                     organization_id=campaign_org_id,
                 )
@@ -320,9 +340,12 @@ class OutreachOrchestrator:
                 failed_count = 0
                 skipped_count = 0
                 processed = 0
+                claimed_count = 0
                 run_records: list[Dict[str, Any]] = []
 
                 for index, lead_data in enumerate(leads, start=1):
+                    if claimed_count >= batch_size:
+                        break
                     lead_info = {
                         "name": lead_data.get("name", "Valued Contact"),
                         "email": lead_data.get("email"),
@@ -331,6 +354,16 @@ class OutreachOrchestrator:
                         "company": lead_data.get("company", "Your Company"),
                         "industry": lead_data.get("industry", "Business"),
                         "pain_points": lead_data.get("pain_points", "Operational challenges"),
+                        "job_title": lead_data.get("job_title"),
+                        "seniority": lead_data.get("seniority"),
+                        "location": lead_data.get("location"),
+                        "company_size": lead_data.get("company_size"),
+                        "company_website": lead_data.get("company_website"),
+                        "company_description": lead_data.get("company_description"),
+                        "recent_activity": lead_data.get("recent_activity"),
+                        "enrichment_source": lead_data.get("enrichment_source"),
+                        "icp_score": lead_data.get("icp_score"),
+                        "icp_rationale": lead_data.get("icp_rationale"),
                         "touch_count": lead_data.get("touch_count", 0),
                         "emails_sent": lead_data.get("emails_sent", 0),
                         "responded": lead_data.get("responded", 0),
@@ -363,6 +396,7 @@ class OutreachOrchestrator:
                             continue
                         
                         claim_message_id = claim.get("message_id")
+                        claimed_count += 1
                         current_step_info = claim.get("step") or {"step_number": 1, "channel": "email"}
                         target_channel = current_step_info.get("channel", "email")
                         step_context = current_step_info.get("prompt_context", "")
@@ -430,7 +464,13 @@ class OutreachOrchestrator:
                                         deep_link_url=deep_link_url or ""
                                     )
                                 elif target_channel == "whatsapp":
-                                    draft = await create_whatsapp_message(camp_info["name"], camp_info["value_proposition"], context=step_context)
+                                    draft = await create_whatsapp_message(
+                                        campaign_name=camp_info["name"],
+                                        value_proposition=camp_info["value_proposition"],
+                                        lead_info=lead_info,
+                                        step_number=int(current_step_info.get("step_number") or 1),
+                                        context=step_context,
+                                    )
                                     raw_number = lead_info.get("phone_number") or ""
                                     clean_number = str(raw_number).replace("+", "").replace("-", "").replace(" ", "").strip()
                                     if clean_number and clean_number.lower() != "none":

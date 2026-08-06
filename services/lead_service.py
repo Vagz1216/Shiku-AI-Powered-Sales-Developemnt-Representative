@@ -379,6 +379,14 @@ class DBLeadProvider(LeadProvider):
             WHERE l.email_opt_out = 0
               AND c.status = 'ACTIVE'
               AND cl.emails_sent < c.max_emails_per_lead
+              AND NOT EXISTS (
+                  SELECT 1 FROM email_messages em
+                  WHERE em.organization_id = l.organization_id
+                    AND em.campaign_id = c.id
+                    AND em.lead_id = l.id
+                    AND em.direction = 'outbound'
+                    AND UPPER(COALESCE(em.status, '')) IN ('DRAFT', 'SCHEDULED', 'GENERATING')
+              )
             """
             group_sql = (
                 "GROUP BY l.id, l.name, l.email, l.phone_number, l.linkedin_url, l.company, l.industry, l.pain_points, l.status, "
@@ -397,6 +405,14 @@ class DBLeadProvider(LeadProvider):
             WHERE l.email_opt_out = 0
               AND c.status = 'ACTIVE'
               AND cl.emails_sent < c.max_emails_per_lead
+              AND NOT EXISTS (
+                  SELECT 1 FROM email_messages em
+                  WHERE em.organization_id = l.organization_id
+                    AND em.campaign_id = c.id
+                    AND em.lead_id = l.id
+                    AND em.direction = 'outbound'
+                    AND UPPER(COALESCE(em.status, '')) IN ('DRAFT', 'SCHEDULED', 'GENERATING')
+              )
             """
             group_sql = "GROUP BY l.id"
         query = select_sql

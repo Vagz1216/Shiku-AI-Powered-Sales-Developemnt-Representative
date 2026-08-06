@@ -365,7 +365,7 @@ export default function Home() {
         const data = JSON.parse(event.data)
         setOutreachLogs(prev => [...prev, withLogTimestamp(data)])
         
-        if (data.status === 'success' || data.status === 'error') {
+        if (data.terminal) {
           eventSource.close()
           setIsStreaming(false)
           void refreshPendingDraftCount()

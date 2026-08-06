@@ -706,13 +706,23 @@ export default function LeadsPage() {
               </div>
               <div>
                 <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">CSV or JSON file</label>
-                <input
-                  type="file"
-                  accept=".csv,.json,text/csv,application/json"
-                  disabled={saving || !canManageLeads}
-                  onChange={(e) => void handleFileImport(e.target.files?.[0] || null)}
-                  className="block w-full text-sm text-zinc-600 dark:text-zinc-300"
-                />
+                <label className={`inline-flex items-center justify-center rounded-md px-4 py-2 text-sm font-medium text-white shadow-sm ${
+                  saving || !canManageLeads
+                    ? 'cursor-not-allowed bg-zinc-400 opacity-70'
+                    : 'cursor-pointer bg-zinc-900 hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200'
+                }`}>
+                  {saving ? 'Importing...' : 'Upload CSV / JSON'}
+                  <input
+                    type="file"
+                    accept=".csv,.json,text/csv,application/json"
+                    disabled={saving || !canManageLeads}
+                    onChange={(e) => void handleFileImport(e.target.files?.[0] || null)}
+                    className="sr-only"
+                  />
+                </label>
+                <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+                  Select a file to import immediately into the checked campaign(s).
+                </p>
               </div>
               <div className="border-t border-zinc-200 dark:border-zinc-800 pt-4 space-y-3">
                 <input className="w-full px-3 py-2 border rounded-md dark:bg-zinc-800 dark:border-zinc-700" placeholder="External API URL" value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} />

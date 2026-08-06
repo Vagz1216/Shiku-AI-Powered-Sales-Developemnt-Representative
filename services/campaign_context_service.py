@@ -8,11 +8,12 @@ happened without re-reading every email or spending LLM tokens.
 from __future__ import annotations
 
 import datetime
+import json
 import logging
 import re
 from typing import Any
 
-from utils.db_connection import dict_from_row, sql_bool_true, using_postgres
+from utils.db_connection import dict_from_row, get_conn, sql_bool_false, sql_bool_true, using_postgres
 
 logger = logging.getLogger(__name__)
 
@@ -283,3 +284,57 @@ def record_inbound(
         )
     except Exception as exc:
         logger.debug("Could not record inbound campaign context: %s", exc)
+
+
+def set_campaign_lead_responded(
+    *,
+    organization_id: int,
+    campaign_id: int,
+    lead_id: int,
+    responded: bool,
+    actor_id: str | None = None,
+) -> dict[str, Any]:
+    """Set the campaign-scoped response flag used to halt automated follow-ups."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT cl.campaign_id, cl.lead_id, cl.responded, cl.meeting_booked "
+            "FROM campaign_leads cl "
+            "JOIN campaigns c ON c.id = cl.campaign_id "
+            "JOIN leads l ON l.id = cl.lead_id "
+            "WHERE cl.campaign_id = ? AND cl.lead_id = ? "
+            "AND c.organization_id = ? AND l.organization_id = ?",
+            (campaign_id, lead_id, organization_id, organization_id),
+        ).fetchone()
+        current = dict_from_row(row)
+        if not current:
+            raise ValueError("campaign lead assignment not found")
+
+        flag = sql_bool_true() if responded else sql_bool_false()
+        with conn:
+            conn.execute(
+                f"UPDATE campaign_leads SET responded = {flag} WHERE campaign_id = ? AND lead_id = ?",
+                (campaign_id, lead_id),
+            )
+            conn.execute(
+                "INSERT INTO events (organization_id, type, payload, metadata) VALUES (?, ?, ?, ?)",
+                (
+                    organization_id,
+                    "campaign_lead_response_updated",
+                    json.dumps(
+                        {
+                            "campaign_id": campaign_id,
+                            "lead_id": lead_id,
+                            "responded": bool(responded),
+                        },
+                        sort_keys=True,
+                    ),
+                    json.dumps({"actor_id": actor_id}, sort_keys=True) if actor_id else None,
+                ),
+            )
+
+    return {
+        "campaign_id": campaign_id,
+        "lead_id": lead_id,
+        "responded": bool(responded),
+        "meeting_booked": bool(current.get("meeting_booked")),
+    }

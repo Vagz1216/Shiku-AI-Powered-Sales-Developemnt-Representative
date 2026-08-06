@@ -16,6 +16,21 @@ def _conn():
             meeting_booked INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (campaign_id, lead_id)
         );
+        CREATE TABLE campaigns (
+            id INTEGER PRIMARY KEY,
+            organization_id INTEGER NOT NULL
+        );
+        CREATE TABLE leads (
+            id INTEGER PRIMARY KEY,
+            organization_id INTEGER NOT NULL
+        );
+        CREATE TABLE events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            organization_id INTEGER,
+            type TEXT NOT NULL,
+            payload TEXT,
+            metadata TEXT
+        );
         CREATE TABLE campaign_lead_contexts (
             organization_id INTEGER NOT NULL DEFAULT 1,
             campaign_id INTEGER NOT NULL,
@@ -28,7 +43,10 @@ def _conn():
             updated_at TEXT,
             PRIMARY KEY (campaign_id, lead_id)
         );
+        INSERT INTO campaigns (id, organization_id) VALUES (10, 1), (11, 1);
+        INSERT INTO leads (id, organization_id) VALUES (1, 1);
         INSERT INTO campaign_leads (campaign_id, lead_id) VALUES (10, 1);
+        INSERT INTO campaign_leads (campaign_id, lead_id) VALUES (11, 1);
         """
     )
     return conn
@@ -75,6 +93,39 @@ def test_record_outbound_keeps_latest_outbound_summary():
 
     assert context["last_outbound_subject"] == "Hello"
     assert "pipeline hygiene" in context["last_outbound_summary"]
+
+
+def test_set_campaign_lead_responded_is_campaign_scoped(monkeypatch):
+    conn = _conn()
+
+    class DummyConn:
+        def __enter__(self):
+            return conn
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(campaign_context_service, "get_conn", lambda: DummyConn())
+
+    result = campaign_context_service.set_campaign_lead_responded(
+        organization_id=1,
+        campaign_id=10,
+        lead_id=1,
+        responded=True,
+        actor_id="user_1",
+    )
+
+    flags = conn.execute(
+        "SELECT campaign_id, responded FROM campaign_leads ORDER BY campaign_id"
+    ).fetchall()
+    event = conn.execute(
+        "SELECT type, payload, metadata FROM events WHERE type = 'campaign_lead_response_updated'"
+    ).fetchone()
+
+    assert result["responded"] is True
+    assert [(row["campaign_id"], row["responded"]) for row in flags] == [(10, 1), (11, 0)]
+    assert '"campaign_id": 10' in event["payload"]
+    assert '"actor_id": "user_1"' in event["metadata"]
 
 
 def test_summarize_text_keeps_complete_context_and_cta():

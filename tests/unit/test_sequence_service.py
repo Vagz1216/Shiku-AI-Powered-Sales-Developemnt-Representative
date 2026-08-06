@@ -59,6 +59,15 @@ def _conn():
             active INTEGER NOT NULL DEFAULT 1,
             created_at TEXT
         );
+        CREATE TABLE campaign_sequences (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            campaign_id INTEGER NOT NULL,
+            step_number INTEGER NOT NULL,
+            channel TEXT NOT NULL DEFAULT 'email',
+            delay_days INTEGER NOT NULL DEFAULT 3,
+            prompt_context TEXT,
+            created_at TEXT
+        );
         CREATE TABLE email_messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             organization_id INTEGER NOT NULL DEFAULT 1,
@@ -71,7 +80,8 @@ def _conn():
             status TEXT,
             processed INTEGER NOT NULL DEFAULT 0,
             approved INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT
+            created_at TEXT,
+            channel TEXT
         );
         CREATE TABLE events (
             id INTEGER PRIMARY KEY,
@@ -86,9 +96,11 @@ def _conn():
         INSERT INTO campaign_leads (campaign_id, lead_id, emails_sent) VALUES (10, 1, 1);
         INSERT INTO campaign_sequence_steps (
             id, campaign_id, step_number, delay_days, subject_template, body_template, active
-        ) VALUES (
-            100, 10, 1, 1, 'Re: {campaign_name}', 'Hi {name}, checking on {value_proposition}. {cta}', 1
-        );
+        ) VALUES
+            (100, 10, 1, 1, 'Initial {campaign_name}', 'Hi {name}, first touch.', 1),
+            (101, 10, 2, 1, 'Re: {campaign_name}', 'Hi {name}, checking on {value_proposition}. {cta}', 1);
+        INSERT INTO campaign_sequences (campaign_id, step_number, channel, delay_days)
+        VALUES (10, 1, 'whatsapp', 1), (10, 2, 'email', 1);
         """
     )
     return conn
@@ -112,13 +124,14 @@ def test_generate_due_followup_drafts_creates_one_draft(monkeypatch):
     first = sequence_service.generate_due_followup_drafts(campaign_id=10)
     second = sequence_service.generate_due_followup_drafts(campaign_id=10)
 
-    row = conn.execute("SELECT subject, body, sequence_step_id, status FROM email_messages").fetchone()
+    row = conn.execute("SELECT subject, body, sequence_step_id, status, channel FROM email_messages").fetchone()
 
     assert first["generated"] == 1
     assert second["generated"] == 0
     assert row["subject"] == "Re: Demo"
-    assert row["sequence_step_id"] == 100
+    assert row["sequence_step_id"] == 101
     assert row["status"] == "DRAFT"
+    assert row["channel"] == "email"
     assert "Ada" in row["body"]
 
 
@@ -135,3 +148,18 @@ def test_generate_due_followup_drafts_records_context(monkeypatch):
     assert result["generated"] == 1
     assert context["last_outbound_subject"] == "Re: Demo"
     assert "better pipeline hygiene" in context["last_outbound_summary"]
+
+
+def test_generate_due_followup_drafts_uses_configured_next_channel(monkeypatch):
+    conn = _conn()
+    conn.execute("UPDATE campaign_leads SET emails_sent = 0 WHERE campaign_id = 10 AND lead_id = 1")
+    monkeypatch.setattr(sequence_service, "get_conn", lambda: DummyConn(conn))
+
+    result = sequence_service.generate_due_followup_drafts(campaign_id=10)
+    row = conn.execute("SELECT sequence_step_id, channel FROM email_messages").fetchone()
+
+    assert result["generated"] == 1
+    assert result["drafts"][0]["step_number"] == 1
+    assert result["drafts"][0]["channel"] == "whatsapp"
+    assert row["sequence_step_id"] == 100
+    assert row["channel"] == "whatsapp"
