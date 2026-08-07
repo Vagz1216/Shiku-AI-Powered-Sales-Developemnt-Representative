@@ -1826,7 +1826,7 @@ async def list_drafts(
                     "e.id, e.subject, e.body, e.created_at, e.lead_id, e.campaign_id, "
                     "e.sequence_step_id, e.external_message_id, e.external_thread_id, "
                     "e.selected_draft_type, e.review_rationale, "
-                    "e.channel, e.deep_link_url, "
+                    "e.channel, e.deep_link_url, e.send_attempts, e.last_error, "
                     "l.touch_count, cl.emails_sent, "
                     "l.name as lead_name, l.email as lead_email, "
                     "COALESCE(c.name, 'No campaign') as campaign_name, "

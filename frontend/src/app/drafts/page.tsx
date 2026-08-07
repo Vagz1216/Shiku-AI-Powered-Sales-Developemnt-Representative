@@ -23,6 +23,8 @@ interface Draft {
   lead_email: string
   campaign_name: string
   attachments: DraftAttachment[]
+  send_attempts?: number | null
+  last_error?: string | null
 }
 
 interface DraftReviewContext {
@@ -407,6 +409,7 @@ export default function DraftsPage() {
         message: data.message || (approved ? 'Draft approved and sent.' : 'Draft rejected.'),
       })
     } catch (err: unknown) {
+      await loadDrafts()
       setFeedback({ type: 'error', message: getErrorMessage(err, 'Action failed') })
     } finally {
       setBusy(false)
@@ -656,6 +659,11 @@ export default function DraftsPage() {
                           Reply context: {draft.review_context.inbound_summary}
                         </div>
                       )}
+                      {draft.last_error && (
+                        <div className="mt-2 max-w-xl rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
+                          Send error{draft.send_attempts ? ` after ${draft.send_attempts} attempt(s)` : ''}: {draft.last_error}
+                        </div>
+                      )}
                       {(draft.attachments || []).length > 0 && (
                         <div className="mt-2 flex flex-wrap gap-1">
                           {draft.attachments.map(attachment => (
@@ -869,6 +877,11 @@ export default function DraftsPage() {
 
               <div className="p-5 overflow-y-auto max-h-[62vh] space-y-5">
                 <div className="text-xs text-zinc-500">Created: {formatTimestamp(viewingDraft.created_at, selectedOrganization?.timezone)}</div>
+                {viewingDraft.last_error && (
+                  <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
+                    Send error{viewingDraft.send_attempts ? ` after ${viewingDraft.send_attempts} attempt(s)` : ''}: {viewingDraft.last_error}
+                  </div>
+                )}
 
                 <section className="space-y-3 border-y border-zinc-200 py-4 dark:border-zinc-800">
                   <div>
