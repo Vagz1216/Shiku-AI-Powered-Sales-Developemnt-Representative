@@ -262,6 +262,11 @@ def test_latest_unseen_uids_returns_newest_first():
     assert mailbox_transport._latest_unseen_uids([b"601 602 605 610"], 2) == [b"610", b"605"]
 
 
+def test_unseen_uids_preserves_total_before_limit():
+    assert mailbox_transport._unseen_uids([b"601 602 605 610"]) == [b"601", b"602", b"605", b"610"]
+    assert mailbox_transport._unseen_uids([]) == []
+
+
 def test_inbound_message_already_recorded_checks_external_message_id(tmp_path, monkeypatch):
     db_path = tmp_path / "dedupe.sqlite3"
     with _connect(db_path) as conn:

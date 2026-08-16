@@ -174,17 +174,25 @@ async def sync_unread_mailbox(
         status, data = client.uid("SEARCH", None, "UNSEEN")
         if status != "OK":
             raise RuntimeError("IMAP search failed")
+        unread_uids = _unseen_uids(data)
+        unread_available_before = len(unread_uids)
         uids = _latest_unseen_uids(data, limit)
         logger.info(
             "IMAP unread search completed",
             extra={
                 "kind": "mailbox_sync_unread_found",
                 "component": "mailbox",
-                "data": {"organization_id": organization_id, "mailbox_id": mailbox_id, "count": len(uids)},
+                "data": {
+                    "organization_id": organization_id,
+                    "mailbox_id": mailbox_id,
+                    "count": len(uids),
+                    "limit": limit,
+                    "unread_available_before": unread_available_before,
+                },
             },
         )
         if callback:
-            await callback("info", f"Found {len(uids)} unread IMAP message(s)")
+            await callback("info", f"Checking {len(uids)} of {unread_available_before} unread IMAP message(s)")
         for uid in uids:
             uid_text = uid.decode("ascii", errors="ignore")
             try:
@@ -338,9 +346,14 @@ async def sync_unread_mailbox(
     )
     if callback:
         await callback("success", f"Mailbox sync complete: {len(processed)} processed, {len(skipped)} skipped, {len(errors)} errors")
+    checked = len(processed) + len(skipped) + len(errors)
     return {
         "mailbox_id": mailbox_id,
-        "checked": len(processed) + len(skipped) + len(errors),
+        "limit": limit,
+        "checked": checked,
+        "unread_available_before": unread_available_before,
+        "unchecked_unread_estimate": max(unread_available_before - len(uids), 0),
+        "has_more_unread": unread_available_before > len(uids),
         "processed": processed,
         "skipped": skipped,
         "errors": errors,
@@ -359,6 +372,7 @@ async def _sync_unread_oauth_mailbox(
     from email_monitor.monitor import email_monitor
 
     messages = mailbox_oauth_service.fetch_unread_messages(mailbox, limit=limit)
+    unread_available_before = len(messages)
     processed: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
@@ -488,9 +502,14 @@ async def _sync_unread_oauth_mailbox(
     )
     if callback:
         await callback("success", f"Mailbox sync complete: {len(processed)} processed, {len(skipped)} skipped, {len(errors)} errors")
+    checked = len(processed) + len(skipped) + len(errors)
     return {
         "mailbox_id": mailbox_id,
-        "checked": len(processed) + len(skipped) + len(errors),
+        "limit": limit,
+        "checked": checked,
+        "unread_available_before": unread_available_before,
+        "unchecked_unread_estimate": 0,
+        "has_more_unread": False,
         "processed": processed,
         "skipped": skipped,
         "errors": errors,
@@ -528,7 +547,13 @@ def _latest_unseen_uids(data: list[bytes] | tuple[bytes, ...], limit: int) -> li
     """
     if not data:
         return []
-    return list(reversed((data[0] or b"").split()))[:limit]
+    return list(reversed(_unseen_uids(data)))[:limit]
+
+
+def _unseen_uids(data: list[bytes] | tuple[bytes, ...]) -> list[bytes]:
+    if not data:
+        return []
+    return (data[0] or b"").split()
 
 
 def _inbound_message_already_recorded(

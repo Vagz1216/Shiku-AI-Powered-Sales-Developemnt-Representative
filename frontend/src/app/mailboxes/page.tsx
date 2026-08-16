@@ -125,7 +125,11 @@ const FALLBACK_MAILBOX_PROVIDERS: MailboxProviderDefinition[] = [
 ]
 
 interface MailboxSyncResponse {
+  limit?: number
   checked?: number
+  unread_available_before?: number
+  unchecked_unread_estimate?: number
+  has_more_unread?: boolean
   processed?: unknown[]
   skipped?: unknown[]
   errors?: unknown[]
@@ -188,7 +192,14 @@ function mailboxSyncFeedback(data: MailboxSyncResponse): NonNullable<ActionFeedb
   const processed = (data.processed || []).length
   const skipped = (data.skipped || []).length
   const errors = (data.errors || []).length
-  const summary = `Checked ${checked} unread message(s), processed ${processed}, skipped ${skipped}.`
+  const unreadBefore = data.unread_available_before
+  const checkedText = typeof unreadBefore === 'number'
+    ? `Checked ${checked} of ${unreadBefore} unread message(s)`
+    : `Checked ${checked} unread message(s)`
+  const remainingText = data.has_more_unread
+    ? ` ${data.unchecked_unread_estimate || 0} unread message(s) were not checked in this run.`
+    : ''
+  const summary = `${checkedText}, processed ${processed}, skipped ${skipped}.${remainingText}`
 
   if (errors > 0) {
     return {
@@ -201,6 +212,12 @@ function mailboxSyncFeedback(data: MailboxSyncResponse): NonNullable<ActionFeedb
     type: 'success',
     message: `Mailbox sync complete. ${summary}`,
   }
+}
+
+function syncLimitValue(value?: string): number {
+  const parsed = Number.parseInt(value || '10', 10)
+  if (Number.isNaN(parsed)) return 10
+  return Math.max(1, Math.min(parsed, 25))
 }
 
 function mailboxSendingDisplay(mailbox: Mailbox, definition: MailboxProviderDefinition) {
@@ -236,6 +253,7 @@ export default function MailboxesPage() {
   const [connectingProvider, setConnectingProvider] = useState<MailboxProvider | null>(null)
   const [feedback, setFeedback] = useState<ActionFeedbackState>(null)
   const [syncResults, setSyncResults] = useState<Record<number, ActionFeedbackState>>({})
+  const [syncLimits, setSyncLimits] = useState<Record<number, string>>({})
   const [providerDefinitions, setProviderDefinitions] = useState<MailboxProviderDefinition[]>(FALLBACK_MAILBOX_PROVIDERS)
   const canManageMailboxes = !!selectedOrganization?.capabilities?.can_manage_mailboxes
   const canSyncMailboxes = canManageMailboxes || selectedOrganization?.current_user_role === 'sales_manager'
@@ -435,11 +453,12 @@ export default function MailboxesPage() {
 
   const syncMailbox = async (mailboxId: number) => {
     if (!selectedOrganizationId || !canSyncMailboxes) return
+    const limit = syncLimitValue(syncLimits[mailboxId])
     setSyncingId(mailboxId)
     setFeedback(null)
     setSyncResults((current) => ({ ...current, [mailboxId]: null }))
     try {
-      const res = await authedFetch(`${API_BASE}/api/organizations/${selectedOrganizationId}/mailboxes/${mailboxId}/sync?limit=10`, {
+      const res = await authedFetch(`${API_BASE}/api/organizations/${selectedOrganizationId}/mailboxes/${mailboxId}/sync?limit=${limit}`, {
         method: 'POST',
       })
       const data = await res.json() as MailboxSyncResponse & { detail?: string; error?: string }
@@ -734,7 +753,7 @@ export default function MailboxesPage() {
                       <td className="px-4 py-3">{mailboxReceivingDisplay(mailbox, mailboxProvider)}</td>
                       <td className="px-4 py-3 text-zinc-500">{formatTimestamp(mailbox.last_tested_at, selectedOrganization?.timezone)}</td>
                       <td className="px-4 py-3">
-                        <div className="flex gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                           <button
                             onClick={() => editMailbox(mailbox)}
                             disabled={!canManageMailboxes}
@@ -749,6 +768,21 @@ export default function MailboxesPage() {
                           >
                             {testingId === mailbox.id ? 'Testing...' : 'Test'}
                           </button>
+                          <label className="flex items-center gap-1 text-xs text-zinc-500 dark:text-zinc-400">
+                            Check
+                            <input
+                              type="number"
+                              min={1}
+                              max={25}
+                              value={syncLimits[mailbox.id] ?? '10'}
+                              onChange={(event) => {
+                                const value = event.target.value
+                                setSyncLimits((current) => ({ ...current, [mailbox.id]: value }))
+                              }}
+                              disabled={syncingId === mailbox.id || mailbox.status !== 'CONNECTED' || !mailboxProvider.supports_reply_sync || !canSyncMailboxes}
+                              className="w-16 px-2 py-2 border border-zinc-300 rounded-md text-sm text-zinc-900 bg-white disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+                            />
+                          </label>
                           <button
                             onClick={() => void syncMailbox(mailbox.id)}
                             disabled={syncingId === mailbox.id || mailbox.status !== 'CONNECTED' || !mailboxProvider.supports_reply_sync || !canSyncMailboxes}
