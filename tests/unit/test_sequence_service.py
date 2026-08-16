@@ -128,7 +128,7 @@ def test_generate_due_followup_drafts_creates_one_draft(monkeypatch):
 
     assert first["generated"] == 1
     assert second["generated"] == 0
-    assert row["subject"] == "Re: Demo"
+    assert row["subject"] == "Demo"
     assert row["sequence_step_id"] == 101
     assert row["status"] == "DRAFT"
     assert row["channel"] == "email"
@@ -146,7 +146,7 @@ def test_generate_due_followup_drafts_records_context(monkeypatch):
     ).fetchone()
 
     assert result["generated"] == 1
-    assert context["last_outbound_subject"] == "Re: Demo"
+    assert context["last_outbound_subject"] == "Demo"
     assert "better pipeline hygiene" in context["last_outbound_summary"]
 
 

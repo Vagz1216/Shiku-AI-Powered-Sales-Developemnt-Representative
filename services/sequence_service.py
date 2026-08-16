@@ -15,7 +15,7 @@ DEFAULT_SEQUENCE_STEPS = [
     {
         "step_number": 1,
         "delay_days": 3,
-        "subject_template": "Re: {campaign_name}",
+        "subject_template": "Following up with {company}",
         "body_template": (
             "Hi {name},\n\n"
             "{context_hint}I wanted to follow up on my note about {value_proposition}. "
@@ -68,6 +68,14 @@ def _render(template: str, context: dict[str, Any]) -> str:
             return ""
 
     return template.format_map(SafeDict({k: "" if v is None else v for k, v in context.items()})).strip()
+
+
+def _sequence_subject(subject: str, context: dict[str, Any]) -> str:
+    """Normalize generated sequence subjects so they do not fake reply threads."""
+    text = " ".join((subject or "").strip().split())
+    while text.lower().startswith(("re:", "fw:", "fwd:")):
+        text = text.split(":", 1)[1].strip()
+    return text or _render("Following up with {company}", context)
 
 
 def _context_hint(context: dict[str, Any]) -> str:
@@ -230,7 +238,10 @@ def generate_due_followup_drafts(campaign_id: int | None = None, limit: int = 50
                     "conversation_context": campaign_context_service.format_context_for_followup(item),
                     "context_hint": _context_hint(item),
                 }
-                subject = _render(item.get("subject_template") or "Re: {campaign_name}", context)
+                subject = _sequence_subject(
+                    _render(item.get("subject_template") or "Following up with {company}", context),
+                    context,
+                )
                 channel = str(item.get("channel") or "email").lower()
                 body = _render(item.get("body_template") or DEFAULT_SEQUENCE_STEPS[0]["body_template"], context)
                 if channel == "email":
