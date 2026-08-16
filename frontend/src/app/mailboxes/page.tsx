@@ -197,7 +197,7 @@ function mailboxSyncFeedback(data: MailboxSyncResponse): NonNullable<ActionFeedb
     ? `Checked ${checked} of ${unreadBefore} unread message(s)`
     : `Checked ${checked} unread message(s)`
   const remainingText = data.has_more_unread
-    ? ` ${data.unchecked_unread_estimate || 0} unread message(s) were not checked in this run.`
+    ? ` ${data.unchecked_unread_estimate || 0} unread message(s) were not checked in this run. Run sync again, or increase Check up to 25.`
     : ''
   const summary = `${checkedText}, processed ${processed}, skipped ${skipped}.${remainingText}`
 
@@ -205,6 +205,13 @@ function mailboxSyncFeedback(data: MailboxSyncResponse): NonNullable<ActionFeedb
     return {
       type: 'warning',
       message: `Mailbox sync completed with ${errors} message error(s). ${summary}`,
+    }
+  }
+
+  if (data.has_more_unread) {
+    return {
+      type: 'warning',
+      message: `Mailbox sync needs another run. ${summary}`,
     }
   }
 
