@@ -39,17 +39,42 @@ def _now_iso() -> str:
     return datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def _ineligible(reason: str, *, code: str, skip_step: bool = False, step: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {"eligible": False, "reason": reason, "code": code, "skip_step": skip_step, "step": step}
+
+
+def _clean_phone_number(value: Any) -> str:
+    return "".join(ch for ch in str(value or "") if ch.isdigit())
+
+
+def _channel_prerequisite_error(channel: str, lead: dict[str, Any]) -> str | None:
+    normalized = (channel or "email").strip().lower()
+    if normalized == "whatsapp":
+        phone = _clean_phone_number(lead.get("phone_number"))
+        if len(phone) < 8:
+            return "WhatsApp step cannot be sent because this lead has no valid phone number."
+    elif normalized == "linkedin":
+        linkedin_url = str(lead.get("linkedin_url") or "").strip()
+        if not linkedin_url:
+            return "LinkedIn step cannot be sent because this lead has no LinkedIn URL."
+    elif normalized == "email":
+        email = str(lead.get("email") or "").strip()
+        if "@" not in email:
+            return "Email step cannot be sent because this lead has no valid email address."
+    return None
+
+
 def _find_next_sequence_step(conn, organization_id: int, campaign_id: int, lead_id: int) -> dict[str, Any] | None:
     # 1. Check global opt-out (the only truly global halt signal — legal/preference)
-    lead_row = conn.execute("SELECT email_opt_out FROM leads WHERE id = ?", (lead_id,)).fetchone()
+    lead_row = conn.execute(
+        "SELECT email, phone_number, linkedin_url, email_opt_out FROM leads WHERE id = ?",
+        (lead_id,),
+    ).fetchone()
     if not lead_row:
-        return None
-    try:
-        email_opt_out = lead_row["email_opt_out"]
-    except (KeyError, TypeError, IndexError):
-        email_opt_out = lead_row[0]
-    if email_opt_out:
-        return None  # Hard stop: lead has opted out globally
+        return _ineligible("Lead was not found.", code="lead_not_found")
+    lead = dict_from_row(lead_row) or {}
+    if lead.get("email_opt_out"):
+        return _ineligible("Lead is globally opted out.", code="opted_out")
 
     # 1b. Check campaign-scoped halt signals — isolated per (campaign_id, lead_id)
     cl_row = conn.execute(
@@ -60,9 +85,9 @@ def _find_next_sequence_step(conn, organization_id: int, campaign_id: int, lead_
     campaign_touch_count = int(cl.get("emails_sent") or 0)
     if cl:
         if cl.get("meeting_booked"):
-            return None  # Meeting already booked in this campaign
+            return _ineligible("Meeting already booked for this campaign lead.", code="meeting_booked")
         if cl.get("responded"):
-            return None  # Lead replied in this campaign — halt automated outreach
+            return _ineligible("Lead already responded in this campaign.", code="responded")
 
     # 2. Get all active touches for this campaign/lead
     touches = [dict_from_row(r) for r in conn.execute(
@@ -84,7 +109,12 @@ def _find_next_sequence_step(conn, organization_id: int, campaign_id: int, lead_
         last_touch = touches[-1]
         # If the last touch is not sent yet, we can't move to the next step
         if last_touch.get("status", "").upper() != "SENT":
-            return None # e.g. DRAFT or GENERATING
+            status = last_touch.get("status", "pending")
+            step = last_touch.get("message_step_number") or "unknown"
+            return _ineligible(
+                f"Step {step} already has a {status} outreach item. Review or resolve that draft before creating another.",
+                code="pending_touch",
+            )
         
         # sequence_step_id stores the campaign_sequence_steps row id, not the
         # step number. Older omnichannel drafts may not have it, so infer from
@@ -105,7 +135,7 @@ def _find_next_sequence_step(conn, organization_id: int, campaign_id: int, lead_
         except:
             last_time = datetime.datetime.now(datetime.UTC)
     else:
-        next_step_num = 1
+        next_step_num = campaign_touch_count + 1 if campaign_touch_count > 0 else 1
         last_time = None
 
     # 3. Fetch next step definition from campaign_sequences
@@ -120,18 +150,117 @@ def _find_next_sequence_step(conn, organization_id: int, campaign_id: int, lead_
     if not seq_row:
         # Fallback for Step 1 if no sequences are defined (backward compatibility)
         if next_step_num == 1:
-            return {"step_number": 1, "channel": "email", "delay_days": 0}
-        return None # Sequence exhausted
+            seq = {"step_number": 1, "channel": "email", "delay_days": 0}
+            error = _channel_prerequisite_error("email", lead)
+            if error:
+                return _ineligible(error, code="missing_channel_data", skip_step=True, step=seq)
+            return seq
+        return _ineligible(f"Sequence exhausted after step {next_step_num - 1}.", code="sequence_exhausted")
 
     seq = dict_from_row(seq_row)
+    channel_error = _channel_prerequisite_error(str(seq.get("channel") or "email"), lead)
+    if channel_error:
+        return _ineligible(
+            f"Step {seq.get('step_number')} skipped: {channel_error}",
+            code="missing_channel_data",
+            skip_step=True,
+            step=seq,
+        )
     
     # 4. Check delay
     if last_time and seq.get("delay_days", 0) > 0:
         days_passed = (datetime.datetime.now(datetime.UTC) - last_time).days
         if days_passed < seq["delay_days"]:
-            return None # Waiting for delay
+            due_at = last_time + datetime.timedelta(days=int(seq["delay_days"]))
+            return _ineligible(
+                f"Step {seq.get('step_number')} is waiting for the delay window. Due at {due_at.replace(microsecond=0).isoformat()}.",
+                code="delay_not_passed",
+            )
 
     return seq
+
+
+def _record_skipped_sequence_step(
+    conn,
+    *,
+    organization_id: int,
+    campaign_id: int,
+    lead_id: int,
+    lead_email: str | None,
+    step: dict[str, Any],
+    reason: str,
+) -> None:
+    channel = str(step.get("channel") or "email").lower()
+    step_number = int(step.get("step_number") or 0)
+    subject = f"Skipped {channel} outreach"
+    body = f"Skipped step {step_number} for {lead_email or 'lead'}: {reason}"
+    created_at = _now_iso()
+    try:
+        conn.execute(
+            "INSERT INTO email_messages "
+            "(organization_id, lead_id, campaign_id, direction, subject, body, status, processed, approved, created_at, sequence_step_id, channel, last_error) "
+            "VALUES (?, ?, ?, 'outbound', ?, ?, 'FAILED', 1, 0, ?, ?, ?, ?)",
+            (
+                organization_id,
+                lead_id,
+                campaign_id,
+                subject,
+                body,
+                created_at,
+                step.get("sequence_step_id"),
+                channel,
+                reason[:1000],
+            ),
+        )
+    except Exception:
+        conn.execute(
+            "INSERT INTO email_messages "
+            "(organization_id, lead_id, campaign_id, direction, subject, body, status, processed, approved, created_at, sequence_step_id, channel) "
+            "VALUES (?, ?, ?, 'outbound', ?, ?, 'FAILED', 1, 0, ?, ?, ?)",
+            (
+                organization_id,
+                lead_id,
+                campaign_id,
+                subject,
+                body,
+                created_at,
+                step.get("sequence_step_id"),
+                channel,
+            ),
+        )
+    conn.execute(
+        "UPDATE campaign_leads SET emails_sent = CASE WHEN emails_sent < ? THEN ? ELSE emails_sent END WHERE campaign_id = ? AND lead_id = ?",
+        (step_number, step_number, campaign_id, lead_id),
+    )
+    try:
+        conn.execute(
+            "INSERT INTO events (organization_id, type, payload, metadata) VALUES (?, ?, ?, ?)",
+            (
+                organization_id,
+                "campaign_sequence_step_skipped",
+                json.dumps(
+                    {
+                        "campaign_id": campaign_id,
+                        "lead_id": lead_id,
+                        "step_number": step_number,
+                        "channel": channel,
+                        "reason": reason,
+                    }
+                ),
+                None,
+            ),
+        )
+    except Exception as exc:
+        logger.debug("Could not record skipped sequence event: %s", exc)
+
+
+def _skip_summary(skipped_steps: list[dict[str, Any]]) -> str:
+    if not skipped_steps:
+        return ""
+    return " ".join(
+        f"Skipped step {item.get('step_number')} {item.get('channel')}: {item.get('reason')}"
+        for item in skipped_steps
+    )
 
 
 def _claim_next_outreach_touch(
@@ -147,9 +276,38 @@ def _claim_next_outreach_touch(
     try:
         with get_conn() as conn:
             with conn:
-                next_step = _find_next_sequence_step(conn, organization_id, campaign_id, lead_id)
+                skipped_steps: list[dict[str, Any]] = []
+                next_step: dict[str, Any] | None = None
+                for _attempt in range(5):
+                    candidate = _find_next_sequence_step(conn, organization_id, campaign_id, lead_id)
+                    if not candidate:
+                        return {"claimed": False, "error": "No eligible sequence step found."}
+                    if candidate.get("eligible", True):
+                        next_step = candidate
+                        break
+                    if candidate.get("skip_step") and candidate.get("step"):
+                        step = candidate["step"]
+                        reason = str(candidate.get("reason") or "Step skipped because required channel data is missing.")
+                        _record_skipped_sequence_step(
+                            conn,
+                            organization_id=organization_id,
+                            campaign_id=campaign_id,
+                            lead_id=lead_id,
+                            lead_email=lead_email,
+                            step=step,
+                            reason=reason,
+                        )
+                        skipped_steps.append(
+                            {
+                                "step_number": step.get("step_number"),
+                                "channel": step.get("channel"),
+                                "reason": reason,
+                            }
+                        )
+                        continue
+                    return {"claimed": False, "error": candidate.get("reason") or "No eligible sequence step found.", "code": candidate.get("code")}
                 if not next_step:
-                    return {"claimed": False, "error": "No eligible sequence step found (waiting, exhausted, or halted)."}
+                    return {"claimed": False, "error": "No eligible sequence step found after skipping unavailable channel steps."}
                 
                 cur = conn.execute(
                     "INSERT INTO email_messages "
@@ -166,7 +324,7 @@ def _claim_next_outreach_touch(
                         next_step["channel"],
                     ),
                 )
-                return {"claimed": True, "message_id": cur.lastrowid, "step": next_step}
+                return {"claimed": True, "message_id": cur.lastrowid, "step": next_step, "skipped_steps": skipped_steps}
     except Exception as exc:
         return {"claimed": False, "error": str(exc)}
 
@@ -400,6 +558,9 @@ class OutreachOrchestrator:
                         current_step_info = claim.get("step") or {"step_number": 1, "channel": "email"}
                         target_channel = current_step_info.get("channel", "email")
                         step_context = current_step_info.get("prompt_context", "")
+                        skipped_step_note = _skip_summary(claim.get("skipped_steps") or [])
+                        if skipped_step_note and callback:
+                            await callback("warning", f"{lead_info['email']}: {skipped_step_note}")
 
                         requested_routing_mode = campaign_routing_mode
                         if has_tenant_context:
@@ -576,6 +737,7 @@ class OutreachOrchestrator:
                                         "status": "sent",
                                         "subject": review_result.subject,
                                         "selected_draft_type": review_result.selected_draft_type,
+                                        "skipped_steps": claim.get("skipped_steps") or [],
                                     })
                                     if callback:
                                         await callback("success", f"Auto-approved and sent '{review_result.selected_draft_type}' draft to {lead_info['email']}")
@@ -669,6 +831,7 @@ class OutreachOrchestrator:
                                         "status": "draft",
                                         "subject": review_result.subject,
                                         "selected_draft_type": review_result.selected_draft_type,
+                                        "skipped_steps": claim.get("skipped_steps") or [],
                                     })
                                     if callback:
                                         await callback("success", f"Saved draft #{draft_id} for human approval: {lead_info['email']}")
