@@ -163,3 +163,46 @@ def test_generate_due_followup_drafts_uses_configured_next_channel(monkeypatch):
     assert result["drafts"][0]["channel"] == "whatsapp"
     assert row["sequence_step_id"] == 100
     assert row["channel"] == "whatsapp"
+
+
+def test_replace_sequence_steps_preserves_referenced_step_ids(monkeypatch):
+    conn = _conn()
+    conn.execute(
+        "INSERT INTO email_messages "
+        "(organization_id, lead_id, campaign_id, sequence_step_id, direction, subject, body, status, processed, approved, created_at, channel) "
+        "VALUES (1, 1, 10, 100, 'outbound', 'Initial Demo', 'Hi Ada', 'SENT', 1, 1, '2000-01-01T00:00:00Z', 'email')"
+    )
+    monkeypatch.setattr(sequence_service, "get_conn", lambda: DummyConn(conn))
+
+    steps = sequence_service.replace_sequence_steps(
+        10,
+        [
+            {
+                "step_number": 1,
+                "delay_days": 1,
+                "subject_template": "Updated first step",
+                "body_template": "Updated body",
+                "active": True,
+            },
+            {
+                "step_number": 2,
+                "delay_days": 1,
+                "subject_template": "Updated second step",
+                "body_template": "Second body",
+                "active": True,
+            },
+            {
+                "step_number": 3,
+                "delay_days": 2,
+                "subject_template": "Third step",
+                "body_template": "Third body",
+                "active": True,
+            },
+        ],
+    )
+    message = conn.execute("SELECT sequence_step_id FROM email_messages WHERE subject = 'Initial Demo'").fetchone()
+    first_step = conn.execute("SELECT subject_template FROM campaign_sequence_steps WHERE id = 100").fetchone()
+
+    assert message["sequence_step_id"] == 100
+    assert first_step["subject_template"] == "Updated first step"
+    assert [step["step_number"] for step in steps] == [1, 2, 3]

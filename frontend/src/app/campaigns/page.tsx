@@ -433,7 +433,7 @@ export default function CampaignsPage() {
       delay_days: 3,
       channel: 'email',
       prompt_context: '',
-      subject_template: 'Re: {campaign_name}',
+      subject_template: 'Following up with {company}',
       body_template: 'Hi {name},\n\nFollowing up on my previous note about {value_proposition}.\n\n{cta}\n\nBest,\n{sender_name}',
       active: true,
     }])

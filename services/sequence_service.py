@@ -141,6 +141,8 @@ def replace_sequence_steps(campaign_id: int, steps: list[dict[str, Any]], organi
         )
         seen.add(step_number)
 
+    cleaned.sort(key=lambda item: item["step_number"])
+
     with get_conn() as conn:
         campaign = conn.execute(
             "SELECT id, organization_id FROM campaigns WHERE id = ? "
@@ -150,21 +152,57 @@ def replace_sequence_steps(campaign_id: int, steps: list[dict[str, Any]], organi
         if not campaign:
             raise ValueError("campaign not found")
         with conn:
-            conn.execute("DELETE FROM campaign_sequence_steps WHERE campaign_id = ?", (campaign_id,))
+            existing_rows = conn.execute(
+                "SELECT id, step_number FROM campaign_sequence_steps WHERE campaign_id = ?",
+                (campaign_id,),
+            ).fetchall()
+            existing_by_step = {int(row["step_number"]): dict_from_row(row) for row in existing_rows}
+            requested_steps = {int(step["step_number"]) for step in cleaned}
+
             for step in cleaned:
-                conn.execute(
-                    "INSERT INTO campaign_sequence_steps "
-                    "(campaign_id, step_number, delay_days, subject_template, body_template, active) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    (
-                        campaign_id,
-                        step["step_number"],
-                        step["delay_days"],
-                        step["subject_template"],
-                        step["body_template"],
-                        1 if step["active"] else 0,
-                    ),
+                existing = existing_by_step.get(int(step["step_number"]))
+                values = (
+                    step["delay_days"],
+                    step["subject_template"],
+                    step["body_template"],
+                    1 if step["active"] else 0,
                 )
+                if existing:
+                    conn.execute(
+                        "UPDATE campaign_sequence_steps "
+                        "SET delay_days = ?, subject_template = ?, body_template = ?, active = ? "
+                        "WHERE id = ?",
+                        (*values, existing["id"]),
+                    )
+                else:
+                    conn.execute(
+                        "INSERT INTO campaign_sequence_steps "
+                        "(campaign_id, step_number, delay_days, subject_template, body_template, active) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (
+                            campaign_id,
+                            step["step_number"],
+                            step["delay_days"],
+                            step["subject_template"],
+                            step["body_template"],
+                            1 if step["active"] else 0,
+                        ),
+                    )
+
+            for step_number, existing in existing_by_step.items():
+                if step_number in requested_steps:
+                    continue
+                references = conn.execute(
+                    "SELECT COUNT(*) AS count FROM email_messages WHERE sequence_step_id = ?",
+                    (existing["id"],),
+                ).fetchone()
+                if references and int(references["count"] or 0) > 0:
+                    conn.execute(
+                        "UPDATE campaign_sequence_steps SET active = ? WHERE id = ?",
+                        (0, existing["id"]),
+                    )
+                else:
+                    conn.execute("DELETE FROM campaign_sequence_steps WHERE id = ?", (existing["id"],))
             conn.execute(
                 "INSERT INTO events (organization_id, type, payload, metadata) VALUES (?, ?, ?, ?)",
                 (campaign["organization_id"], "campaign_sequence_updated", json.dumps({"campaign_id": campaign_id, "step_count": len(cleaned)}), None),
