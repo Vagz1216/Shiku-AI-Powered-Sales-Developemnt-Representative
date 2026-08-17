@@ -429,6 +429,7 @@ class OutreachOrchestrator:
         organization_id: int | None = None,
         callback: Optional[SSECallback] = None,
         ignore_delay: bool = False,
+        actor_claims: dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         """Execute a complete database-driven outreach campaign via Worker Agents."""
         msg = f"Starting Orchestrator for campaign. Target: {campaign_name or 'Random'}"
@@ -527,8 +528,6 @@ class OutreachOrchestrator:
                     "value_proposition": campaign.value_proposition,
                     "cta": campaign.cta,
                     "tone": settings.tone,
-                    "sender_name": settings.outreach_sender_name,
-                    "sender_company": settings.outreach_sender_company,
                     "organization_id": campaign_org_id,
                     "organization_name": tenant_metadata.get("organization_name"),
                     "organization_slug": tenant_metadata.get("organization_slug"),
@@ -536,6 +535,9 @@ class OutreachOrchestrator:
                     "plan_slug": tenant_metadata.get("plan_slug"),
                     "llm_routing_mode": campaign_routing_mode,
                 }
+                sender_identity = tenant_service.resolve_sender_identity(campaign_org_id, actor_claims)
+                camp_info["sender_name"] = sender_identity.get("sender_name") or settings.outreach_sender_name
+                camp_info["sender_company"] = sender_identity.get("sender_company") or settings.outreach_sender_company
                 sent_count = 0
                 draft_count = 0
                 failed_count = 0

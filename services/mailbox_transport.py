@@ -10,7 +10,7 @@ import smtplib
 from email import policy
 from email.message import EmailMessage
 from email.parser import BytesParser
-from email.utils import formataddr, make_msgid, parsedate_to_datetime
+from email.utils import formataddr, make_msgid, parseaddr, parsedate_to_datetime
 from typing import Any
 
 from config import settings
@@ -21,6 +21,16 @@ from services.tenant_service import decrypt_secret
 from utils.db_connection import dict_from_row, get_conn
 
 logger = logging.getLogger(__name__)
+
+
+def _from_address(mailbox: dict[str, Any]) -> str:
+    from_email = mailbox.get("resend_from_email") or mailbox.get("email_address")
+    sender_name = (mailbox.get("sender_display_name") or "").strip()
+    if sender_name:
+        _, parsed_email = parseaddr(str(from_email or ""))
+        if parsed_email:
+            return formataddr((sender_name, parsed_email))
+    return str(from_email or "")
 
 
 def validate_mailbox_config(
@@ -60,7 +70,7 @@ def send_mailbox_email(
                 attachments=attachments,
                 headers=headers,
                 api_key=decrypt_secret(mailbox.get("resend_api_key_secret")),
-                from_email=mailbox.get("resend_from_email") or mailbox.get("email_address"),
+                from_email=_from_address(mailbox),
                 reply_to=mailbox.get("resend_reply_to"),
             )
         if mailbox["provider"] in {"gmail", "microsoft"}:
@@ -106,7 +116,7 @@ def send_mailbox_reply(
             message_id=message_id,
             subject=subject,
             api_key=decrypt_secret(mailbox.get("resend_api_key_secret")),
-            from_email=mailbox.get("resend_from_email") or mailbox.get("email_address"),
+            from_email=_from_address(mailbox),
             reply_to=mailbox.get("resend_reply_to"),
         )
     headers = {}
@@ -659,7 +669,7 @@ def _send_via_smtp(
         raise ValueError("SMTP port 587 uses STARTTLS; disable SMTP SSL or use port 465 with SSL")
 
     from_email = mailbox["email_address"]
-    display_name = mailbox.get("display_name") or from_email
+    display_name = mailbox.get("sender_display_name") or mailbox.get("display_name") or from_email
     domain = from_email.split("@", 1)[1] if "@" in from_email else None
     message_id = make_msgid(domain=domain)
 

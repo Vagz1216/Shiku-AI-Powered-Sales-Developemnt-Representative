@@ -181,6 +181,8 @@ class LLMRoutingModeUpdate(BaseModel):
 
 class MailboxOAuthStartRequest(BaseModel):
     display_name: str | None = None
+    sender_display_name: str | None = None
+    company_display_name: str | None = None
     daily_limit: int = 100
 _scheduled_sender_task: asyncio.Task | None = None
 _mailbox_sync_task: asyncio.Task | None = None
@@ -935,6 +937,24 @@ async def test_mailbox(organization_id: int, mailbox_id: int, user: dict = Depen
     """Test SMTP/IMAP connectivity for a mailbox connection."""
     try:
         return tenant_service.test_mailbox(organization_id, mailbox_id, user)
+    except Exception as e:
+        _raise_service_error(e)
+
+
+@app.post("/api/organizations/{organization_id}/mailboxes/{mailbox_id}/disconnect")
+async def disconnect_mailbox(organization_id: int, mailbox_id: int, user: dict = Depends(get_current_user)):
+    """Disable a mailbox without deleting its saved configuration."""
+    try:
+        return {"mailbox": tenant_service.disconnect_mailbox(organization_id, mailbox_id, user)}
+    except Exception as e:
+        _raise_service_error(e)
+
+
+@app.post("/api/organizations/{organization_id}/mailboxes/{mailbox_id}/reconnect")
+async def reconnect_mailbox(organization_id: int, mailbox_id: int, user: dict = Depends(get_current_user)):
+    """Retest a disabled mailbox and mark it connected only if validation succeeds."""
+    try:
+        return tenant_service.reconnect_mailbox(organization_id, mailbox_id, user)
     except Exception as e:
         _raise_service_error(e)
 
@@ -2948,6 +2968,7 @@ async def generate_due_followups(
                     limit=remaining,
                     organization_id=org_id,
                     ignore_delay=request.ignore_delay,
+                    actor_claims=user,
                 )
                 combined["generated"] += result.get("generated", 0)
                 combined["skipped"] += result.get("skipped", 0)
@@ -2960,6 +2981,7 @@ async def generate_due_followups(
             limit=request.limit,
             organization_id=resolved_org_id,
             ignore_delay=request.ignore_delay,
+            actor_claims=user,
         )
         await outbound_event_service.emit_event("followup_drafts_generated", result)
         return result
@@ -3195,6 +3217,7 @@ async def stream_outreach(
                     organization_id=resolved_org_id,
                     callback=sse_callback,
                     ignore_delay=ignore_delay,
+                    actor_claims=user,
                 )
             )
 
@@ -3239,6 +3262,7 @@ async def execute_marketing_campaign(
             campaign_name=campaign_name,
             organization_id=resolved_org_id,
             ignore_delay=ignore_delay,
+            actor_claims=user,
         )
         return {
             "status": "accepted", 

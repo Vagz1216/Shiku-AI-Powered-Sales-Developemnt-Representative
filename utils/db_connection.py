@@ -747,6 +747,8 @@ def _ensure_tenant_tables(conn: sqlite3.Connection):
                 organization_id INTEGER NOT NULL,
                 provider TEXT NOT NULL CHECK(provider IN ('smtp_imap','resend','gmail','microsoft')),
                 display_name TEXT,
+                sender_display_name TEXT,
+                company_display_name TEXT,
                 email_address TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','CONNECTED','FAILED','DISABLED')),
                 smtp_host TEXT,
@@ -789,6 +791,18 @@ def _ensure_tenant_tables(conn: sqlite3.Connection):
             "organizations",
             "timezone",
             "TEXT NOT NULL DEFAULT 'Africa/Nairobi'",
+        )
+        _add_column_if_missing(
+            conn,
+            "mailbox_connections",
+            "sender_display_name",
+            "TEXT",
+        )
+        _add_column_if_missing(
+            conn,
+            "mailbox_connections",
+            "company_display_name",
+            "TEXT",
         )
     except Exception as e:
         logger.warning(f"Tenant table migration skipped: {e}")

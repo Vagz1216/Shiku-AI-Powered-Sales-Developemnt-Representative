@@ -135,6 +135,8 @@ CREATE TABLE IF NOT EXISTS mailbox_connections (
     organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
     provider TEXT NOT NULL CHECK(provider IN ('smtp_imap','resend','gmail','microsoft')),
     display_name TEXT,
+    sender_display_name TEXT,
+    company_display_name TEXT,
     email_address TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','CONNECTED','FAILED','DISABLED')),
     smtp_host TEXT,

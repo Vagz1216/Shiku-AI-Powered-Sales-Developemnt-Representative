@@ -7,7 +7,7 @@ import json
 from typing import Any
 
 from config import settings
-from services import campaign_context_service
+from services import campaign_context_service, tenant_service
 from utils.db_connection import get_conn, dict_from_row, sql_bool_false, sql_bool_true
 from utils.quick_replies import quick_replies_for_followup
 
@@ -216,6 +216,7 @@ def generate_due_followup_drafts(
     organization_id: int | None = None,
     *,
     ignore_delay: bool = False,
+    actor_claims: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create follow-up drafts for leads whose next active sequence step is due."""
     generated: list[dict[str, Any]] = []
@@ -279,11 +280,12 @@ def generate_due_followup_drafts(
                     "name": item.get("name") or "there",
                     "company": item.get("company") or "your team",
                     "pain_points": item.get("pain_points") or "your current priorities",
-                    "sender_name": settings.outreach_sender_name,
-                    "sender_company": settings.outreach_sender_company,
                     "conversation_context": campaign_context_service.format_context_for_followup(item),
                     "context_hint": _context_hint(item),
                 }
+                sender_identity = tenant_service.resolve_sender_identity(item.get("organization_id"), actor_claims)
+                context["sender_name"] = sender_identity.get("sender_name") or settings.outreach_sender_name
+                context["sender_company"] = sender_identity.get("sender_company") or settings.outreach_sender_company
                 subject = _sequence_subject(
                     _render(item.get("subject_template") or "Following up with {company}", context),
                     context,

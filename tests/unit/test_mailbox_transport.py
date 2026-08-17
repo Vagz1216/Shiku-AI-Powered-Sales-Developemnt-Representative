@@ -107,7 +107,8 @@ def test_send_mailbox_email_uses_tenant_resend_credentials(monkeypatch):
             "organization_id": organization_id or 2,
             "provider": "resend",
             "email_address": "sdr@tenant.test",
-            "resend_from_email": "Tenant <sdr@tenant.test>",
+            "sender_display_name": "Alex",
+            "resend_from_email": "sdr@tenant.test",
             "resend_reply_to": "reply@tenant.test",
             "resend_api_key_secret": "local:cmVfdGVuYW50",
             "daily_limit": 0,
@@ -130,7 +131,7 @@ def test_send_mailbox_email_uses_tenant_resend_credentials(monkeypatch):
 
     assert result.ok is True
     assert captured["api_key"] == "re_tenant"
-    assert captured["from_email"] == "Tenant <sdr@tenant.test>"
+    assert captured["from_email"] == "Alex <sdr@tenant.test>"
     assert captured["reply_to"] == "reply@tenant.test"
 
 

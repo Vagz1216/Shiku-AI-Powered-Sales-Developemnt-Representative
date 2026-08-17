@@ -32,8 +32,8 @@ def tenant_db(tmp_path, monkeypatch):
     return db_path
 
 
-def _claims(email="owner@example.com", sub="user_owner"):
-    return {"sub": sub, "email": email, "name": "Owner"}
+def _claims(email="owner@example.com", sub="user_owner", name="Owner"):
+    return {"sub": sub, "email": email, "name": name}
 
 
 def test_normalize_timezone_accepts_nairobi_typo():
@@ -407,6 +407,8 @@ def test_org_admin_can_create_and_test_smtp_imap_mailbox(tenant_db):
         {
             "provider": "smtp_imap",
             "display_name": "Market Hacks",
+            "sender_display_name": "Grace",
+            "company_display_name": "Market Hacks Kenya",
             "email_address": "info@markethacks.co.ke",
             "smtp_host": "mail.markethacks.co.ke",
             "smtp_port": 465,
@@ -421,6 +423,8 @@ def test_org_admin_can_create_and_test_smtp_imap_mailbox(tenant_db):
     )
 
     assert mailbox["email_address"] == "info@markethacks.co.ke"
+    assert mailbox["sender_display_name"] == "Grace"
+    assert mailbox["company_display_name"] == "Market Hacks Kenya"
     assert mailbox["has_smtp_password"] is True
     assert "smtp_password_secret" not in mailbox
 
@@ -546,6 +550,8 @@ def test_org_admin_can_update_mailbox_without_replacing_blank_secrets(tenant_db)
         {
             "provider": "smtp_imap",
             "display_name": "New Name",
+            "sender_display_name": "New Sender",
+            "company_display_name": "New Company",
             "email_address": "info@markethacks.co.ke",
             "smtp_host": "mail.markethacks.co.ke",
             "smtp_port": 465,
@@ -563,6 +569,8 @@ def test_org_admin_can_update_mailbox_without_replacing_blank_secrets(tenant_db)
     )
 
     assert updated["display_name"] == "New Name"
+    assert updated["sender_display_name"] == "New Sender"
+    assert updated["company_display_name"] == "New Company"
     assert updated["daily_limit"] == 250
     assert updated["status"] == "PENDING"
     assert updated["has_smtp_password"] is True
@@ -572,6 +580,132 @@ def test_org_admin_can_update_mailbox_without_replacing_blank_secrets(tenant_db)
         row = conn.execute("SELECT smtp_password_secret, imap_password_secret FROM mailbox_connections WHERE id = ?", (mailbox["id"],)).fetchone()
     assert tenant_service.decrypt_secret(row["smtp_password_secret"]) == "old-secret"
     assert tenant_service.decrypt_secret(row["imap_password_secret"]) == "old-secret"
+
+
+def test_sender_identity_prefers_single_connected_mailbox_then_actor_then_org(tenant_db):
+    org = tenant_service.create_organization(
+        "StayEZ",
+        "stayez",
+        "admin@stayez.test",
+        _claims(),
+    )
+    admin_claims = _claims(email="admin@stayez.test", sub="invited:admin@stayez.test", name="Martin Lane")
+    mailbox = tenant_service.create_mailbox(
+        org["id"],
+        {
+            "provider": "smtp_imap",
+            "display_name": "StayEZ Homes",
+            "sender_display_name": "Alex",
+            "company_display_name": "StayEZ Partnerships",
+            "email_address": "info@stayez.test",
+            "smtp_host": "mail.stayez.test",
+            "smtp_port": 465,
+            "smtp_username": "info@stayez.test",
+            "smtp_password": "secret",
+            "imap_host": "mail.stayez.test",
+            "imap_port": 993,
+            "imap_username": "info@stayez.test",
+            "imap_password": "secret",
+        },
+        admin_claims,
+    )
+    with _connect(tenant_db) as conn:
+        conn.execute("UPDATE mailbox_connections SET status = 'CONNECTED' WHERE id = ?", (mailbox["id"],))
+
+    identity = tenant_service.resolve_sender_identity(org["id"], admin_claims)
+
+    assert identity["sender_name"] == "Alex"
+    assert identity["sender_company"] == "StayEZ Partnerships"
+    assert identity["mailbox_id"] == str(mailbox["id"])
+
+
+def test_sender_identity_uses_actor_first_name_when_mailbox_sender_is_blank(tenant_db):
+    org = tenant_service.create_organization(
+        "StayEZ",
+        "stayez-actor-fallback",
+        "admin@stayez.test",
+        _claims(),
+    )
+    admin_claims = _claims(email="admin@stayez.test", sub="invited:admin@stayez.test", name="Martin Lane")
+
+    identity = tenant_service.resolve_sender_identity(org["id"], admin_claims)
+
+    assert identity["sender_name"] == "Martin"
+    assert identity["sender_company"] == "StayEZ"
+
+
+def test_org_admin_can_disconnect_and_reconnect_mailbox(tenant_db):
+    org = tenant_service.create_organization(
+        "Market Hacks",
+        "market-hacks-disconnect",
+        "admin@markethacks.co.ke",
+        _claims(),
+    )
+    admin_claims = _claims(email="admin@markethacks.co.ke", sub="invited:admin@markethacks.co.ke")
+    mailbox = tenant_service.create_mailbox(
+        org["id"],
+        {
+            "provider": "smtp_imap",
+            "display_name": "Market Hacks",
+            "sender_display_name": "Grace",
+            "company_display_name": "Market Hacks Kenya",
+            "email_address": "info@markethacks.co.ke",
+            "smtp_host": "mail.markethacks.co.ke",
+            "smtp_port": 465,
+            "smtp_username": "info@markethacks.co.ke",
+            "smtp_password": "secret",
+            "imap_host": "mail.markethacks.co.ke",
+            "imap_port": 993,
+            "imap_username": "info@markethacks.co.ke",
+            "imap_password": "secret",
+        },
+        admin_claims,
+    )
+    with _connect(tenant_db) as conn:
+        conn.execute("UPDATE mailbox_connections SET status = 'CONNECTED' WHERE id = ?", (mailbox["id"],))
+
+    disconnected = tenant_service.disconnect_mailbox(org["id"], mailbox["id"], admin_claims)
+
+    assert disconnected["status"] == "DISABLED"
+    assert disconnected["sender_display_name"] == "Grace"
+    assert disconnected["has_smtp_password"] is True
+
+    class FakeSmtp:
+        def __init__(self, host, port, timeout):
+            return None
+
+        def login(self, username, password):
+            assert password == "secret"
+
+        def noop(self):
+            return "250", "OK"
+
+        def quit(self):
+            return None
+
+    class FakeImap:
+        def __init__(self, host, port, timeout):
+            return None
+
+        def login(self, username, password):
+            assert password == "secret"
+
+        def select(self, mailbox, readonly=True):
+            return None
+
+        def logout(self):
+            return None
+
+    reconnected = tenant_service.reconnect_mailbox(
+        org["id"],
+        mailbox["id"],
+        admin_claims,
+        smtp_factory=FakeSmtp,
+        imap_factory=FakeImap,
+    )
+
+    assert reconnected["success"] is True
+    assert reconnected["mailbox"]["status"] == "CONNECTED"
 
 
 def test_org_admin_can_create_and_test_resend_mailbox(tenant_db):
@@ -676,7 +810,12 @@ def test_google_oauth_callback_creates_connected_mailbox(tenant_db, monkeypatch)
     started = mailbox_oauth_service.build_authorization_url(
         organization_id=org["id"],
         provider="gmail",
-        data={"display_name": "Connected Gmail", "daily_limit": 123},
+        data={
+            "display_name": "Connected Gmail",
+            "sender_display_name": "OAuth Sender",
+            "company_display_name": "OAuth Company",
+            "daily_limit": 123,
+        },
         actor_claims=admin_claims,
         redirect_uri="http://localhost:8000/api/mailboxes/oauth/gmail/callback",
     )
@@ -691,6 +830,8 @@ def test_google_oauth_callback_creates_connected_mailbox(tenant_db, monkeypatch)
     assert mailbox["provider"] == "gmail"
     assert mailbox["status"] == "CONNECTED"
     assert mailbox["email_address"] == "connected@oauth.test"
+    assert mailbox["sender_display_name"] == "OAuth Sender"
+    assert mailbox["company_display_name"] == "OAuth Company"
     assert mailbox["daily_limit"] == 123
     assert mailbox["has_oauth_refresh_token"] is True
     assert "oauth_refresh_token_secret" not in mailbox

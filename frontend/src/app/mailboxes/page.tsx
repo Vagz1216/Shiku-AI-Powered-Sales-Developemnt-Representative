@@ -29,6 +29,8 @@ interface Mailbox {
   organization_id: number
   provider: MailboxProvider
   display_name: string | null
+  sender_display_name: string | null
+  company_display_name: string | null
   email_address: string
   status: string
   smtp_host: string | null
@@ -58,6 +60,8 @@ interface Mailbox {
 interface MailboxForm {
   provider: MailboxProvider
   display_name: string
+  sender_display_name: string
+  company_display_name: string
   email_address: string
   smtp_host: string
   smtp_port: string
@@ -139,6 +143,8 @@ function emptyForm(): MailboxForm {
   return {
     provider: 'smtp_imap',
     display_name: '',
+    sender_display_name: '',
+    company_display_name: '',
     email_address: '',
     smtp_host: '',
     smtp_port: '465',
@@ -167,6 +173,8 @@ function formFromMailbox(mailbox: Mailbox): MailboxForm {
   return {
     provider: mailbox.provider,
     display_name: mailbox.display_name || '',
+    sender_display_name: mailbox.sender_display_name || '',
+    company_display_name: mailbox.company_display_name || '',
     email_address: mailbox.email_address || '',
     smtp_host: mailbox.smtp_host || '',
     smtp_port: mailbox.smtp_port ? String(mailbox.smtp_port) : '465',
@@ -261,6 +269,7 @@ export default function MailboxesPage() {
   const [feedback, setFeedback] = useState<ActionFeedbackState>(null)
   const [syncResults, setSyncResults] = useState<Record<number, ActionFeedbackState>>({})
   const [syncLimits, setSyncLimits] = useState<Record<number, string>>({})
+  const [statusUpdatingId, setStatusUpdatingId] = useState<number | null>(null)
   const [providerDefinitions, setProviderDefinitions] = useState<MailboxProviderDefinition[]>(FALLBACK_MAILBOX_PROVIDERS)
   const canManageMailboxes = !!selectedOrganization?.capabilities?.can_manage_mailboxes
   const canSyncMailboxes = canManageMailboxes || selectedOrganization?.current_user_role === 'sales_manager'
@@ -394,6 +403,8 @@ export default function MailboxesPage() {
       const payload = {
         provider: form.provider,
         display_name: form.display_name,
+        sender_display_name: form.sender_display_name,
+        company_display_name: form.company_display_name,
         email_address: form.email_address,
         smtp_host: form.provider === 'smtp_imap' ? form.smtp_host : null,
         smtp_port: form.provider === 'smtp_imap' ? Number(form.smtp_port) : null,
@@ -458,6 +469,50 @@ export default function MailboxesPage() {
     }
   }
 
+  const disconnectMailbox = async (mailboxId: number) => {
+    if (!selectedOrganizationId || !canManageMailboxes) return
+    if (!confirm('Disconnect this mailbox? Saved configuration will remain available for reconnect.')) return
+    setStatusUpdatingId(mailboxId)
+    setFeedback(null)
+    try {
+      const res = await authedFetch(`${API_BASE}/api/organizations/${selectedOrganizationId}/mailboxes/${mailboxId}/disconnect`, {
+        method: 'POST',
+      })
+      const data = await res.json() as { mailbox?: Mailbox; detail?: string; error?: string }
+      if (!res.ok) {
+        throw new Error(data.detail || data.error || 'Mailbox disconnect failed')
+      }
+      setFeedback({ type: 'success', message: `Disconnected mailbox ${data.mailbox?.email_address || mailboxId}.` })
+      await loadMailboxes(selectedOrganizationId)
+    } catch (err: unknown) {
+      setFeedback({ type: 'error', message: getErrorMessage(err, 'Mailbox disconnect failed') })
+    } finally {
+      setStatusUpdatingId(null)
+    }
+  }
+
+  const reconnectMailbox = async (mailboxId: number) => {
+    if (!selectedOrganizationId || !canManageMailboxes) return
+    setStatusUpdatingId(mailboxId)
+    setFeedback(null)
+    try {
+      const res = await authedFetch(`${API_BASE}/api/organizations/${selectedOrganizationId}/mailboxes/${mailboxId}/reconnect`, {
+        method: 'POST',
+      })
+      const data = await res.json() as { success?: boolean; status?: string; error?: string; detail?: string; mailbox?: Mailbox }
+      if (!res.ok || data.success === false) {
+        throw new Error(data.error || data.detail || 'Mailbox reconnect failed')
+      }
+      setFeedback({ type: 'success', message: `Reconnected mailbox ${data.mailbox?.email_address || mailboxId}.` })
+      await loadMailboxes(selectedOrganizationId)
+    } catch (err: unknown) {
+      setFeedback({ type: 'error', message: getErrorMessage(err, 'Mailbox reconnect failed') })
+      await loadMailboxes(selectedOrganizationId)
+    } finally {
+      setStatusUpdatingId(null)
+    }
+  }
+
   const syncMailbox = async (mailboxId: number) => {
     if (!selectedOrganizationId || !canSyncMailboxes) return
     const limit = syncLimitValue(syncLimits[mailboxId])
@@ -504,6 +559,8 @@ export default function MailboxesPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           display_name: form.display_name || undefined,
+          sender_display_name: form.sender_display_name || undefined,
+          company_display_name: form.company_display_name || undefined,
           daily_limit: Number(form.daily_limit || 100),
         }),
       })
@@ -606,6 +663,8 @@ export default function MailboxesPage() {
                 </span>
               </label>
               <TextField label="Display name" value={form.display_name} onChange={(value) => updateForm('display_name', value)} />
+              <TextField label="Sender display name" value={form.sender_display_name} onChange={(value) => updateForm('sender_display_name', value)} required={false} />
+              <TextField label="Company display name" value={form.company_display_name} onChange={(value) => updateForm('company_display_name', value)} required={false} />
               <TextField label="Email address" value={form.email_address} onChange={(value) => updateForm('email_address', value)} type="email" />
               {form.provider === 'smtp_imap' ? (
                 <>
@@ -743,6 +802,9 @@ export default function MailboxesPage() {
                       <td className="px-4 py-3">
                         <div className="font-medium">{mailbox.display_name || mailbox.email_address}</div>
                         <div className="text-xs text-zinc-500">{mailbox.email_address}</div>
+                        <div className="text-xs text-zinc-500">
+                          Sender: {mailbox.sender_display_name || 'user fallback'} / {mailbox.company_display_name || selectedOrganization?.name || 'organization fallback'}
+                        </div>
                       </td>
                       <td className="px-4 py-3">
                         <div>{mailboxProvider.label}</div>
@@ -775,6 +837,24 @@ export default function MailboxesPage() {
                           >
                             {testingId === mailbox.id ? 'Testing...' : 'Test'}
                           </button>
+                          {mailbox.status === 'CONNECTED' && (
+                            <button
+                              onClick={() => void disconnectMailbox(mailbox.id)}
+                              disabled={statusUpdatingId === mailbox.id || !canManageMailboxes}
+                              className="px-3 py-2 border border-amber-300 text-amber-700 rounded-md text-sm font-medium hover:bg-amber-50 disabled:opacity-50 dark:border-amber-800 dark:text-amber-300 dark:hover:bg-amber-950/30"
+                            >
+                              {statusUpdatingId === mailbox.id ? 'Disconnecting...' : 'Disconnect'}
+                            </button>
+                          )}
+                          {mailbox.status === 'DISABLED' && (
+                            <button
+                              onClick={() => void reconnectMailbox(mailbox.id)}
+                              disabled={statusUpdatingId === mailbox.id || !canManageMailboxes || !mailboxProvider.supports_testing}
+                              className="px-3 py-2 text-sm font-medium text-white bg-zinc-900 rounded-md hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
+                            >
+                              {statusUpdatingId === mailbox.id ? 'Reconnecting...' : 'Reconnect'}
+                            </button>
+                          )}
                           <label className="flex items-center gap-1 text-xs text-zinc-500 dark:text-zinc-400">
                             Check
                             <input

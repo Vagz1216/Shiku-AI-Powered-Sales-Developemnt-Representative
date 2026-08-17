@@ -141,6 +141,8 @@ class MailboxCreate(BaseModel):
 
     provider: MailboxProvider = "smtp_imap"
     display_name: str | None = Field(default=None, max_length=120)
+    sender_display_name: str | None = Field(default=None, max_length=120)
+    company_display_name: str | None = Field(default=None, max_length=120)
     email_address: str
     daily_limit: int = Field(default=100, ge=1, le=5000)
 

@@ -460,6 +460,22 @@ def _optional_positive_int(value: Any, field: str) -> int | None:
     return resolved
 
 
+def _optional_text(value: Any, *, max_length: int = 120) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return text[:max_length]
+
+
+def _first_name(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    return text.split()[0][:120]
+
+
 def _routing_modes_value(value: Any, *, default: str) -> str:
     if isinstance(value, (list, tuple, set)):
         raw = ",".join(str(item) for item in value)
@@ -1280,16 +1296,18 @@ def create_mailbox(organization_id: int, data: dict[str, Any], actor_claims: dic
         with conn:
             cur = conn.execute(
                 "INSERT INTO mailbox_connections "
-                "(organization_id, provider, display_name, email_address, status, "
+                "(organization_id, provider, display_name, sender_display_name, company_display_name, email_address, status, "
                 "smtp_host, smtp_port, smtp_use_ssl, smtp_username, smtp_password_secret, "
                 "imap_host, imap_port, imap_use_ssl, imap_username, imap_password_secret, "
                 "resend_domain, resend_from_email, resend_reply_to, resend_api_key_secret, "
                 "resend_webhook_secret_secret, daily_limit, updated_at) "
-                "VALUES (?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     organization_id,
                     provider,
-                    data.get("display_name"),
+                    _optional_text(data.get("display_name")),
+                    _optional_text(data.get("sender_display_name")),
+                    _optional_text(data.get("company_display_name")),
                     email_address,
                     data.get("smtp_host"),
                     data.get("smtp_port"),
@@ -1405,7 +1423,7 @@ def update_mailbox(
         with conn:
             conn.execute(
                 "UPDATE mailbox_connections SET "
-                "provider = ?, display_name = ?, email_address = ?, status = 'PENDING', "
+                "provider = ?, display_name = ?, sender_display_name = ?, company_display_name = ?, email_address = ?, status = 'PENDING', "
                 "smtp_host = ?, smtp_port = ?, smtp_use_ssl = ?, smtp_username = ?, smtp_password_secret = ?, "
                 "imap_host = ?, imap_port = ?, imap_use_ssl = ?, imap_username = ?, imap_password_secret = ?, "
                 "resend_domain = ?, resend_from_email = ?, resend_reply_to = ?, resend_api_key_secret = ?, "
@@ -1413,7 +1431,9 @@ def update_mailbox(
                 "WHERE organization_id = ? AND id = ?",
                 (
                     provider,
-                    data.get("display_name"),
+                    _optional_text(data.get("display_name")),
+                    _optional_text(data.get("sender_display_name")),
+                    _optional_text(data.get("company_display_name")),
                     email_address,
                     data.get("smtp_host") if provider == "smtp_imap" else None,
                     data.get("smtp_port") if provider == "smtp_imap" else None,
@@ -1483,6 +1503,118 @@ def get_mailbox(organization_id: int, mailbox_id: int) -> dict[str, Any]:
         if not data:
             raise ValueError("mailbox not found")
     return sanitize_mailbox(data)
+
+
+def disconnect_mailbox(organization_id: int, mailbox_id: int, actor_claims: dict[str, Any]) -> dict[str, Any]:
+    actor_ctx = require_org_role(actor_claims, organization_id, ADMIN_ROLES)
+    with get_conn() as conn:
+        existing = conn.execute(
+            "SELECT id FROM mailbox_connections WHERE organization_id = ? AND id = ?",
+            (organization_id, mailbox_id),
+        ).fetchone()
+        if not existing:
+            raise ValueError("mailbox not found")
+        with conn:
+            conn.execute(
+                "UPDATE mailbox_connections SET status = 'DISABLED', last_error = NULL, updated_at = ? "
+                "WHERE organization_id = ? AND id = ?",
+                (now_iso(), organization_id, mailbox_id),
+            )
+            conn.execute(
+                "INSERT INTO events (type, payload, metadata) VALUES (?, ?, ?)",
+                (
+                    "mailbox_disconnected",
+                    json.dumps({"organization_id": organization_id, "mailbox_id": mailbox_id}),
+                    json.dumps({"actor_user_id": actor_ctx["user"]["id"]}),
+                ),
+            )
+    return get_mailbox(organization_id, mailbox_id)
+
+
+def reconnect_mailbox(
+    organization_id: int,
+    mailbox_id: int,
+    actor_claims: dict[str, Any],
+    *,
+    smtp_factory: Callable[..., Any] | None = None,
+    imap_factory: Callable[..., Any] | None = None,
+) -> dict[str, Any]:
+    result = test_mailbox(
+        organization_id,
+        mailbox_id,
+        actor_claims,
+        smtp_factory=smtp_factory,
+        imap_factory=imap_factory,
+    )
+    result["mailbox"] = get_mailbox(organization_id, mailbox_id)
+    return result
+
+
+def resolve_sender_identity(
+    organization_id: int | None,
+    actor_claims: dict[str, Any] | None = None,
+    mailbox_id: int | None = None,
+) -> dict[str, str | None]:
+    """Resolve tenant sender identity for draft generation.
+
+    Shared mailbox identity wins over the user who clicked Run Outreach. The
+    actor first name is only a fallback for manual user-triggered workflows.
+    """
+    mailbox: dict[str, Any] | None = None
+    if organization_id is not None:
+        params: list[Any] = [organization_id]
+        where = [
+            "organization_id = ?",
+            "status = 'CONNECTED'",
+            "provider IN ('smtp_imap','resend','gmail','microsoft')",
+        ]
+        if mailbox_id is not None:
+            where.append("id = ?")
+            params.append(mailbox_id)
+        try:
+            with get_conn() as conn:
+                rows = conn.execute(
+                    f"SELECT * FROM mailbox_connections WHERE {' AND '.join(where)} ORDER BY id DESC",
+                    tuple(params),
+                ).fetchall()
+                mailboxes = [dict_from_row(row) for row in rows]
+            if mailbox_id is not None and mailboxes:
+                mailbox = mailboxes[0]
+            elif len(mailboxes) == 1:
+                mailbox = mailboxes[0]
+        except Exception as exc:
+            logger.debug("Could not resolve mailbox sender identity: %s", exc)
+
+    actor_first_name = None
+    if actor_claims and not actor_claims.get("cron"):
+        try:
+            actor = ensure_app_user(actor_claims)
+            actor_first_name = _first_name(actor.get("name"))
+        except Exception as exc:
+            logger.debug("Could not resolve actor sender identity: %s", exc)
+
+    organization_name = None
+    if organization_id is not None:
+        try:
+            organization_name = _optional_text(get_organization(int(organization_id)).get("name"))
+        except Exception as exc:
+            logger.debug("Could not resolve organization sender identity: %s", exc)
+
+    sender_name = (
+        _optional_text((mailbox or {}).get("sender_display_name"))
+        or actor_first_name
+        or _optional_text(settings.outreach_sender_name)
+    )
+    sender_company = (
+        _optional_text((mailbox or {}).get("company_display_name"))
+        or organization_name
+        or _optional_text(settings.outreach_sender_company)
+    )
+    return {
+        "sender_name": sender_name,
+        "sender_company": sender_company,
+        "mailbox_id": str(mailbox.get("id")) if mailbox else None,
+    }
 
 
 def get_resend_webhook_mailbox(mailbox_id: int) -> dict[str, Any]:
