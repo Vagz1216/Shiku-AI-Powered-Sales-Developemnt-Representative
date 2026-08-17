@@ -14,6 +14,7 @@ interface Draft {
   id: number
   subject: string
   body: string
+  status?: 'DRAFT' | 'FAILED' | string
   created_at: string
   draft_source: 'inbound_response' | 'outreach'
   channel: 'email' | 'whatsapp' | 'linkedin'
@@ -25,6 +26,10 @@ interface Draft {
   attachments: DraftAttachment[]
   send_attempts?: number | null
   last_error?: string | null
+  failure_category?: 'data_missing' | 'provider_error' | 'content_blocked' | 'technical_error' | string | null
+  failure_action?: string | null
+  failure_severity?: 'warning' | 'error' | string | null
+  step_skipped?: boolean
 }
 
 interface DraftReviewContext {
@@ -103,6 +108,27 @@ function channelBadgeClass(channel: Draft['channel']) {
   if (channel === 'whatsapp') return 'border-green-300 bg-green-50 text-green-800 dark:border-green-700 dark:bg-green-950/40 dark:text-green-300'
   if (channel === 'linkedin') return 'border-blue-300 bg-blue-50 text-blue-800 dark:border-blue-700 dark:bg-blue-950/40 dark:text-blue-300'
   return ''
+}
+
+function isPendingDraft(draft: Draft) {
+  return (draft.status || 'DRAFT').toUpperCase() === 'DRAFT'
+}
+
+function failureLabel(draft: Draft) {
+  if (isPendingDraft(draft) && !draft.last_error) return null
+  if (draft.failure_category === 'data_missing') return draft.step_skipped ? 'Data issue - skipped' : 'Data issue'
+  if (draft.failure_category === 'provider_error') return 'Provider issue'
+  if (draft.failure_category === 'content_blocked') return 'Content blocked'
+  if (draft.failure_category === 'technical_error') return 'Technical issue'
+  if ((draft.status || '').toUpperCase() === 'FAILED') return 'Failed'
+  return draft.last_error ? 'Needs attention' : null
+}
+
+function failureBoxClass(draft: Draft) {
+  if (draft.failure_severity === 'warning' || draft.failure_category === 'data_missing') {
+    return 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300'
+  }
+  return 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300'
 }
 
 function intentLabel(intent?: string | null) {
@@ -206,12 +232,15 @@ export default function DraftsPage() {
       if (sourceFilter === 'outreach' && d.draft_source !== 'outreach') return false
       if (!q) return true
       return (
-        d.subject.toLowerCase().includes(q) ||
-        d.body.toLowerCase().includes(q) ||
+        (d.subject || '').toLowerCase().includes(q) ||
+        (d.body || '').toLowerCase().includes(q) ||
         d.lead_name.toLowerCase().includes(q) ||
         d.lead_email.toLowerCase().includes(q) ||
         d.campaign_name.toLowerCase().includes(q) ||
         sourceLabel(d).toLowerCase().includes(q) ||
+        (failureLabel(d) || '').toLowerCase().includes(q) ||
+        (d.failure_action || '').toLowerCase().includes(q) ||
+        (d.last_error || '').toLowerCase().includes(q) ||
         (d.review_context?.inbound_summary || '').toLowerCase().includes(q) ||
         (d.review_context?.last_outbound_summary || '').toLowerCase().includes(q) ||
         (d.review_context?.generation_summary || '').toLowerCase().includes(q) ||
@@ -222,7 +251,7 @@ export default function DraftsPage() {
     })
   }, [drafts, query, sourceFilter])
 
-  const visibleIds = useMemo(() => filtered.map(d => d.id), [filtered])
+  const visibleIds = useMemo(() => filtered.filter(isPendingDraft).map(d => d.id), [filtered])
   const allVisibleSelected = visibleIds.length > 0 && visibleIds.every(id => selectedIds.includes(id))
 
   const loadDrafts = useCallback(async () => {
@@ -251,6 +280,8 @@ export default function DraftsPage() {
   }, [isLoaded, userId, selectedOrganizationId, loadDrafts])
 
   const toggleSelected = (draftId: number) => {
+    const draft = drafts.find(item => item.id === draftId)
+    if (draft && !isPendingDraft(draft)) return
     setSelectedIds(prev => prev.includes(draftId) ? prev.filter(id => id !== draftId) : [...prev, draftId])
   }
 
@@ -265,8 +296,8 @@ export default function DraftsPage() {
   const openDraft = (draft: Draft) => {
     setFeedback(null)
     setViewingDraft(draft)
-    setEditSubject(draft.subject)
-    setEditBody(draft.body)
+    setEditSubject(draft.subject || '')
+    setEditBody(draft.body || '')
     setNewFiles([])
   }
 
@@ -621,7 +652,7 @@ export default function DraftsPage() {
             Stop future attempts when deleting
           </label>
           <span className="text-sm text-zinc-500">
-            Showing {filtered.length} of {drafts.length} pending drafts
+            Showing {filtered.length} of {drafts.length} draft(s) and outreach issue(s)
           </span>
         </div>
 
@@ -647,6 +678,7 @@ export default function DraftsPage() {
                     <td className="px-4 py-3">
                       <input
                         type="checkbox"
+                        disabled={!isPendingDraft(draft)}
                         checked={selectedIds.includes(draft.id)}
                         onChange={() => toggleSelected(draft.id)}
                       />
@@ -654,12 +686,19 @@ export default function DraftsPage() {
                     <td className="px-4 py-3">
                       <div className="font-medium text-zinc-900 dark:text-zinc-100">#{draft.id} — {draft.subject}</div>
                       <div className="text-xs text-zinc-500 max-w-xl line-clamp-2">{draft.body}</div>
+                      {failureLabel(draft) && (
+                        <div className={`mt-2 max-w-xl rounded-md border px-2 py-1 text-xs ${failureBoxClass(draft)}`}>
+                          <div className="font-medium">{failureLabel(draft)}</div>
+                          {draft.last_error && <div>{draft.last_error}</div>}
+                          {draft.failure_action && <div className="mt-1">{draft.failure_action}</div>}
+                        </div>
+                      )}
                       {draft.draft_source === 'inbound_response' && draft.review_context?.inbound_summary && (
                         <div className="mt-2 max-w-xl text-xs text-zinc-600 dark:text-zinc-400">
                           Reply context: {draft.review_context.inbound_summary}
                         </div>
                       )}
-                      {draft.last_error && (
+                      {draft.last_error && !failureLabel(draft) && (
                         <div className="mt-2 max-w-xl rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
                           Send error{draft.send_attempts ? ` after ${draft.send_attempts} attempt(s)` : ''}: {draft.last_error}
                         </div>
@@ -704,7 +743,7 @@ export default function DraftsPage() {
                       >
                         Review
                       </button>
-                      {draft.channel === 'email' && (
+                      {isPendingDraft(draft) && draft.channel === 'email' && (
                         <>
                           <button
                             disabled={busy || !canReviewDrafts}
@@ -722,7 +761,7 @@ export default function DraftsPage() {
                           </button>
                         </>
                       )}
-                      {draft.channel === 'whatsapp' && (
+                      {isPendingDraft(draft) && draft.channel === 'whatsapp' && (
                         draft.deep_link_url ? (
                           <a
                             href={draft.deep_link_url}
@@ -738,7 +777,7 @@ export default function DraftsPage() {
                           </span>
                         )
                       )}
-                      {draft.channel === 'linkedin' && (
+                      {isPendingDraft(draft) && draft.channel === 'linkedin' && (
                         <>
                           <button
                             disabled={busy}
@@ -759,7 +798,7 @@ export default function DraftsPage() {
                           )}
                         </>
                       )}
-                      {(draft.channel === 'whatsapp' || draft.channel === 'linkedin') && (
+                      {isPendingDraft(draft) && (draft.channel === 'whatsapp' || draft.channel === 'linkedin') && (
                         <button
                           disabled={busy || !canReviewDrafts}
                           onClick={() => void markAsSent(draft)}
@@ -769,7 +808,7 @@ export default function DraftsPage() {
                         </button>
                       )}
                       <button
-                        disabled={busy || !canReviewDrafts}
+                        disabled={busy || !canReviewDrafts || !isPendingDraft(draft)}
                         onClick={() => singleAction(draft.id, false)}
                         className="px-3 py-1 bg-rose-600 text-white rounded-md text-xs font-medium disabled:opacity-50"
                       >
@@ -788,7 +827,7 @@ export default function DraftsPage() {
                 {filtered.length === 0 && (
                   <tr>
                     <td colSpan={7} className="px-6 py-8 text-center text-zinc-500">
-                      No pending drafts found.
+                      No drafts or outreach issues found.
                     </td>
                   </tr>
                 )}
@@ -801,13 +840,14 @@ export default function DraftsPage() {
           {loading ? (
             <p className="rounded-xl border border-zinc-200 bg-white p-5 text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900">Loading drafts...</p>
           ) : filtered.length === 0 ? (
-            <p className="rounded-xl border border-zinc-200 bg-white p-5 text-center text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900">No pending drafts found.</p>
+            <p className="rounded-xl border border-zinc-200 bg-white p-5 text-center text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900">No drafts or outreach issues found.</p>
           ) : filtered.map(draft => (
             <article key={draft.id} className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
               <div className="flex items-start gap-3">
                 <input
                   type="checkbox"
                   className="mt-1"
+                  disabled={!isPendingDraft(draft)}
                   checked={selectedIds.includes(draft.id)}
                   onChange={() => toggleSelected(draft.id)}
                 />
@@ -822,6 +862,13 @@ export default function DraftsPage() {
                   </div>
                   <h3 className="mt-2 text-sm font-semibold text-zinc-900 dark:text-zinc-100">#{draft.id} — {draft.subject}</h3>
                   <p className="mt-1 line-clamp-3 text-xs text-zinc-500">{draft.body}</p>
+                  {failureLabel(draft) && (
+                    <div className={`mt-2 rounded-md border px-2 py-1 text-xs ${failureBoxClass(draft)}`}>
+                      <div className="font-medium">{failureLabel(draft)}</div>
+                      {draft.last_error && <div>{draft.last_error}</div>}
+                      {draft.failure_action && <div className="mt-1">{draft.failure_action}</div>}
+                    </div>
+                  )}
                   {draft.draft_source === 'inbound_response' && draft.review_context?.inbound_summary && (
                     <p className="mt-2 text-xs text-zinc-600 dark:text-zinc-400">
                       Reply context: {draft.review_context.inbound_summary}
@@ -834,9 +881,9 @@ export default function DraftsPage() {
                   </div>
                   <div className="mt-3 grid grid-cols-2 gap-2">
                     <button disabled={busy || !canReviewDrafts} onClick={() => openDraft(draft)} className="rounded-md bg-zinc-600 px-3 py-2 text-xs font-medium text-white disabled:opacity-50">Review</button>
-                    <button disabled={busy || !canReviewDrafts} onClick={() => singleAction(draft.id, true)} className="rounded-md bg-emerald-600 px-3 py-2 text-xs font-medium text-white disabled:opacity-50">Approve</button>
-                    <button disabled={busy || !scheduledSendAt.trim() || !canReviewDrafts} onClick={() => singleAction(draft.id, true, scheduledSendAt)} className="rounded-md bg-blue-600 px-3 py-2 text-xs font-medium text-white disabled:opacity-50">Schedule</button>
-                    <button disabled={busy || !canReviewDrafts} onClick={() => singleAction(draft.id, false)} className="rounded-md bg-rose-600 px-3 py-2 text-xs font-medium text-white disabled:opacity-50">Reject</button>
+                    <button disabled={busy || !canReviewDrafts || !isPendingDraft(draft)} onClick={() => singleAction(draft.id, true)} className="rounded-md bg-emerald-600 px-3 py-2 text-xs font-medium text-white disabled:opacity-50">Approve</button>
+                    <button disabled={busy || !scheduledSendAt.trim() || !canReviewDrafts || !isPendingDraft(draft)} onClick={() => singleAction(draft.id, true, scheduledSendAt)} className="rounded-md bg-blue-600 px-3 py-2 text-xs font-medium text-white disabled:opacity-50">Schedule</button>
+                    <button disabled={busy || !canReviewDrafts || !isPendingDraft(draft)} onClick={() => singleAction(draft.id, false)} className="rounded-md bg-rose-600 px-3 py-2 text-xs font-medium text-white disabled:opacity-50">Reject</button>
                     <button disabled={busy || !canReviewDrafts} onClick={() => singleDelete(draft.id)} className="col-span-2 rounded-md bg-zinc-800 px-3 py-2 text-xs font-medium text-white disabled:opacity-50 dark:bg-zinc-200 dark:text-zinc-900">Delete</button>
                   </div>
                 </div>
@@ -861,7 +908,9 @@ export default function DraftsPage() {
                       <span className="text-xs capitalize text-zinc-500">{intentLabel(viewingDraft.review_context?.intent)}</span>
                     )}
                   </div>
-                  <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">Review and edit before approval</p>
+                  <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+                    {isPendingDraft(viewingDraft) ? 'Review and edit before approval' : 'Outreach issue recorded for this lead'}
+                  </p>
                   <p className="text-xs text-zinc-500 mt-1">
                     {viewingDraft.lead_name} ({viewingDraft.lead_email}) • {viewingDraft.campaign_name}
                   </p>
@@ -877,9 +926,11 @@ export default function DraftsPage() {
 
               <div className="p-5 overflow-y-auto max-h-[62vh] space-y-5">
                 <div className="text-xs text-zinc-500">Created: {formatTimestamp(viewingDraft.created_at, selectedOrganization?.timezone)}</div>
-                {viewingDraft.last_error && (
-                  <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
-                    Send error{viewingDraft.send_attempts ? ` after ${viewingDraft.send_attempts} attempt(s)` : ''}: {viewingDraft.last_error}
+                {failureLabel(viewingDraft) && (
+                  <div className={`mt-3 rounded-md border px-3 py-2 text-sm ${failureBoxClass(viewingDraft)}`}>
+                    <div className="font-medium">{failureLabel(viewingDraft)}</div>
+                    {viewingDraft.last_error && <div>{viewingDraft.last_error}</div>}
+                    {viewingDraft.failure_action && <div className="mt-1">{viewingDraft.failure_action}</div>}
                   </div>
                 )}
 
@@ -966,7 +1017,7 @@ export default function DraftsPage() {
                     )}
                 </section>
 
-                {viewingDraft.channel === 'email' && (
+                {isPendingDraft(viewingDraft) && viewingDraft.channel === 'email' && (
                   <label className="block">
                     <span className="block text-xs font-medium text-zinc-600 dark:text-zinc-400 mb-1">Subject</span>
                     <input
@@ -978,17 +1029,26 @@ export default function DraftsPage() {
                   </label>
                 )}
 
-                <label className="block">
-                  <span className="block text-xs font-medium text-zinc-600 dark:text-zinc-400 mb-1">Body</span>
-                  <textarea
-                    value={editBody}
-                    onChange={e => setEditBody(e.target.value)}
-                    rows={14}
-                    className="w-full px-3 py-2 border rounded-md text-sm leading-relaxed resize-y dark:bg-zinc-800 dark:border-zinc-700"
-                  />
-                </label>
+                {isPendingDraft(viewingDraft) ? (
+                  <label className="block">
+                    <span className="block text-xs font-medium text-zinc-600 dark:text-zinc-400 mb-1">Body</span>
+                    <textarea
+                      value={editBody}
+                      onChange={e => setEditBody(e.target.value)}
+                      rows={14}
+                      className="w-full px-3 py-2 border rounded-md text-sm leading-relaxed resize-y dark:bg-zinc-800 dark:border-zinc-700"
+                    />
+                  </label>
+                ) : (
+                  <div>
+                    <div className="text-xs font-medium text-zinc-600 dark:text-zinc-400 mb-1">Recorded issue</div>
+                    <p className="rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-700 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300">
+                      {viewingDraft.body || viewingDraft.last_error || 'No additional issue detail was recorded.'}
+                    </p>
+                  </div>
+                )}
 
-                <div>
+                {isPendingDraft(viewingDraft) && <div>
                   <div className="text-xs font-medium text-zinc-600 dark:text-zinc-400 mb-2">Attachments</div>
                   <div className="space-y-2">
                     {(viewingDraft.attachments || []).map(attachment => (
@@ -1032,11 +1092,11 @@ export default function DraftsPage() {
                     onChange={e => setNewFiles(Array.from(e.target.files || []))}
                     className="mt-3 block w-full text-sm text-zinc-700 file:mr-4 file:rounded-md file:border-0 file:bg-zinc-900 file:px-3 file:py-2 file:text-sm file:font-medium file:text-white dark:text-zinc-300 dark:file:bg-zinc-100 dark:file:text-zinc-900"
                   />
-                </div>
+                </div>}
               </div>
 
               <div className="p-5 border-t border-zinc-200 dark:border-zinc-800 flex flex-wrap gap-2 justify-end">
-                {viewingDraft.channel === 'email' && (
+                {isPendingDraft(viewingDraft) && viewingDraft.channel === 'email' && (
                   <input
                     type="datetime-local"
                     value={scheduledSendAt}
@@ -1045,13 +1105,13 @@ export default function DraftsPage() {
                   />
                 )}
                 <button
-                  disabled={busy || savingEdit}
+                  disabled={busy || savingEdit || !isPendingDraft(viewingDraft)}
                   onClick={() => void saveDraftEdits()}
                   className="px-3 py-2 border border-zinc-300 rounded-md text-sm font-medium disabled:opacity-50 dark:border-zinc-700"
                 >
                   {savingEdit ? 'Saving...' : 'Save Changes'}
                 </button>
-                {viewingDraft.channel === 'email' && (
+                {isPendingDraft(viewingDraft) && viewingDraft.channel === 'email' && (
                   <>
                     <button
                       disabled={busy || savingEdit}
@@ -1069,7 +1129,7 @@ export default function DraftsPage() {
                     </button>
                   </>
                 )}
-                {viewingDraft.channel === 'whatsapp' && (
+                {isPendingDraft(viewingDraft) && viewingDraft.channel === 'whatsapp' && (
                   viewingDraft.deep_link_url ? (
                     <a
                       href={viewingDraft.deep_link_url}
@@ -1088,7 +1148,7 @@ export default function DraftsPage() {
                     </div>
                   )
                 )}
-                {viewingDraft.channel === 'linkedin' && (
+                {isPendingDraft(viewingDraft) && viewingDraft.channel === 'linkedin' && (
                   <>
                     <button
                       onClick={() => void copyToClipboard(editBody, viewingDraft.id)}
@@ -1108,7 +1168,7 @@ export default function DraftsPage() {
                     )}
                   </>
                 )}
-                {(viewingDraft.channel === 'whatsapp' || viewingDraft.channel === 'linkedin') && (
+                {isPendingDraft(viewingDraft) && (viewingDraft.channel === 'whatsapp' || viewingDraft.channel === 'linkedin') && (
                   <button
                     disabled={busy || savingEdit}
                     onClick={() => {
@@ -1121,7 +1181,7 @@ export default function DraftsPage() {
                   </button>
                 )}
                 <button
-                  disabled={busy || savingEdit}
+                  disabled={busy || savingEdit || !isPendingDraft(viewingDraft)}
                   onClick={() => {
                     void singleAction(viewingDraft.id, false)
                     setViewingDraft(null)

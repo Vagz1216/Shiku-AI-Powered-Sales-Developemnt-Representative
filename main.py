@@ -79,6 +79,60 @@ logger = logging.getLogger(__name__)
 # Initialize Orchestrator
 outreach_orchestrator = OutreachOrchestrator()
 
+
+def _failure_metadata(status: Any, last_error: Any, review_rationale: Any, send_attempts: Any = None) -> dict[str, Any]:
+    status_text = str(status or "").upper()
+    error_text = str(last_error or "").strip()
+    parsed: dict[str, Any] = {}
+    if review_rationale:
+        try:
+            value = json.loads(str(review_rationale))
+            if isinstance(value, dict):
+                parsed = value
+        except Exception:
+            parsed = {}
+
+    if parsed.get("failure_category"):
+        return {
+            "failure_category": parsed.get("failure_category"),
+            "failure_action": parsed.get("failure_action"),
+            "failure_severity": parsed.get("failure_severity") or ("error" if status_text == "FAILED" else "warning"),
+            "step_skipped": bool(parsed.get("step_skipped")),
+        }
+
+    if status_text != "FAILED" and not error_text:
+        return {
+            "failure_category": None,
+            "failure_action": None,
+            "failure_severity": None,
+            "step_skipped": False,
+        }
+
+    lowered = error_text.lower()
+    if any(token in lowered for token in ("no valid phone", "no phone number", "no linkedin url", "no valid email", "missing channel")):
+        return {
+            "failure_category": "data_missing",
+            "failure_action": "Update the lead data if you want to retry that channel. If this was an automatic skip, the lead can continue to the next sequence step.",
+            "failure_severity": "warning",
+            "step_skipped": "skipped" in lowered,
+        }
+    if any(token in lowered for token in ("rate limit", "timeout", "temporarily", "connection", "smtp", "provider", "api", "quota")):
+        category = "provider_error"
+        action = "Check the mailbox, provider, API key, quota, or network status, then retry."
+    elif "safety" in lowered or "blocked" in lowered or "spam" in lowered:
+        category = "content_blocked"
+        action = "Edit the content or subject, then approve or retry."
+    else:
+        category = "technical_error"
+        action = "Retry after checking logs or provider configuration. The campaign did not advance unless this was a data-missing skip."
+
+    return {
+        "failure_category": category,
+        "failure_action": action,
+        "failure_severity": "error",
+        "step_skipped": False,
+    }
+
 # Webhook Log Broadcaster
 class WebhookLogBroadcaster:
     def __init__(self):
@@ -1799,8 +1853,7 @@ async def list_drafts(
         ):
             where_clauses = [
                 "e.organization_id = ?",
-                "UPPER(e.status) = 'DRAFT'",
-                "e.approved = 0",
+                "((UPPER(e.status) = 'DRAFT' AND e.approved = 0) OR (UPPER(e.status) = 'FAILED' AND e.last_error IS NOT NULL))",
                 "e.direction = 'outbound'",
             ]
             params: list[Any] = [resolved_org_id]
@@ -1823,7 +1876,7 @@ async def list_drafts(
             with timed_step(request, "drafts.query"):
                 cur = conn.execute(
                     "SELECT "
-                    "e.id, e.subject, e.body, e.created_at, e.lead_id, e.campaign_id, "
+                    "e.id, e.subject, e.body, e.status, e.created_at, e.lead_id, e.campaign_id, "
                     "e.sequence_step_id, e.external_message_id, e.external_thread_id, "
                     "e.selected_draft_type, e.review_rationale, "
                     "e.channel, e.deep_link_url, e.send_attempts, e.last_error, "
@@ -1930,9 +1983,23 @@ async def list_drafts(
                     draft.pop("context_last_outbound_summary", None)
                     draft.pop("source_body", None)
                     draft.pop("context_latest_intent", None)
+                    failure_meta = _failure_metadata(
+                        draft.get("status"),
+                        draft.get("last_error"),
+                        review_context.get("review_rationale"),
+                        draft.get("send_attempts"),
+                    )
+                    draft.update(failure_meta)
+                    if isinstance(review_context.get("review_rationale"), str):
+                        try:
+                            parsed_rationale = json.loads(review_context["review_rationale"])
+                            if isinstance(parsed_rationale, dict) and parsed_rationale.get("failure_category"):
+                                review_context["review_rationale"] = None
+                        except Exception:
+                            pass
                     draft["draft_source"] = review_context["source"]
                     draft["review_context"] = review_context
-                    draft["body"] = draft_service.clean_quick_reply_text(draft["body"])
+                    draft["body"] = draft_service.clean_quick_reply_text(draft.get("body") or "")
                     draft["attachments"] = attachment_map.get(draft["id"], [])
         return {"drafts": drafts}
     except Exception as e:

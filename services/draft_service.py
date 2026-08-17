@@ -742,7 +742,7 @@ def process_single_draft_delete(
     """Delete one pending draft and optionally stop future attempts for that lead/campaign."""
     cur = conn.execute(
         "SELECT id, lead_id, campaign_id FROM email_messages "
-        "WHERE id = ? AND UPPER(status) = 'DRAFT' AND approved = 0 AND direction = 'outbound' "
+        "WHERE id = ? AND ((UPPER(status) = 'DRAFT' AND approved = 0) OR UPPER(status) = 'FAILED') AND direction = 'outbound' "
         + ("AND organization_id = ?" if organization_id is not None else ""),
         (draft_id, organization_id) if organization_id is not None else (draft_id,),
     )

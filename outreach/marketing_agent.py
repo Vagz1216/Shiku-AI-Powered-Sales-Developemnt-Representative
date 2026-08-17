@@ -198,8 +198,8 @@ def _record_skipped_sequence_step(
     try:
         conn.execute(
             "INSERT INTO email_messages "
-            "(organization_id, lead_id, campaign_id, direction, subject, body, status, processed, approved, created_at, sequence_step_id, channel, last_error) "
-            "VALUES (?, ?, ?, 'outbound', ?, ?, 'FAILED', 1, 0, ?, ?, ?, ?)",
+            "(organization_id, lead_id, campaign_id, direction, subject, body, status, processed, approved, created_at, sequence_step_id, channel, last_error, review_rationale) "
+            "VALUES (?, ?, ?, 'outbound', ?, ?, 'FAILED', 1, 0, ?, ?, ?, ?, ?)",
             (
                 organization_id,
                 lead_id,
@@ -210,6 +210,16 @@ def _record_skipped_sequence_step(
                 step.get("sequence_step_id"),
                 channel,
                 reason[:1000],
+                json.dumps(
+                    {
+                        "failure_category": "data_missing",
+                        "failure_action": "Update the lead data if you want to retry this channel. The campaign advanced to the next sequence step.",
+                        "failure_severity": "warning",
+                        "step_skipped": True,
+                        "step_number": step_number,
+                        "channel": channel,
+                    }
+                ),
             ),
         )
     except Exception:
@@ -375,8 +385,19 @@ def _fail_initial_outreach_touch(message_id: int | None, error: str) -> None:
         with get_conn() as conn:
             with conn:
                 conn.execute(
-                    "UPDATE email_messages SET status = 'FAILED', last_error = ? WHERE id = ? AND status = 'GENERATING'",
-                    (error[:1000], message_id),
+                    "UPDATE email_messages SET status = 'FAILED', last_error = ?, review_rationale = ? WHERE id = ? AND status = 'GENERATING'",
+                    (
+                        error[:1000],
+                        json.dumps(
+                            {
+                                "failure_category": "technical_error",
+                                "failure_action": "Retry the outreach after checking the provider, AI, or server error. The campaign did not advance to the next sequence step.",
+                                "failure_severity": "error",
+                                "step_skipped": False,
+                            }
+                        ),
+                        message_id,
+                    ),
                 )
     except Exception as exc:
         logger.debug("Could not mark outreach generation claim as failed: %s", exc)
