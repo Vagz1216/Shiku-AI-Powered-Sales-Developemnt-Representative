@@ -73,6 +73,7 @@ interface UpcomingFollowup {
   due_at: string | null
   is_due: boolean
   blocked_reason: string | null
+  delay_ignored?: boolean
   existing_message_id?: number
   existing_message_status?: string
 }
@@ -108,6 +109,7 @@ export default function Home() {
   const [followupsOpen, setFollowupsOpen] = useState(false)
   const [upcomingFollowups, setUpcomingFollowups] = useState<UpcomingFollowup[]>([])
   const [followupsLoading, setFollowupsLoading] = useState(false)
+  const [ignoreSequenceDelays, setIgnoreSequenceDelays] = useState(false)
 
   const effectiveOrganizationId = tenantSelectedOrganizationId
   const selectedOrganization = tenantSelectedOrganization
@@ -326,6 +328,7 @@ export default function Home() {
       if (effectiveOrganizationId) url.searchParams.set('organization_id', String(effectiveOrganizationId))
       url.searchParams.set('limit', '100')
       if (campaignId) url.searchParams.set('campaign_id', String(campaignId))
+      if (ignoreSequenceDelays) url.searchParams.set('ignore_delay', 'true')
       const res = await authedFetch(url.toString())
       if (!res.ok) throw new Error('Failed to load upcoming follow-ups')
       const data = await res.json() as { followups?: UpcomingFollowup[] }
@@ -354,6 +357,9 @@ export default function Home() {
       if (effectiveOrganizationId) url.searchParams.set('organization_id', String(effectiveOrganizationId))
       if (selectedCampaign) {
         url.searchParams.append('campaign_name', selectedCampaign)
+      }
+      if (ignoreSequenceDelays) {
+        url.searchParams.append('ignore_delay', 'true')
       }
       if (token) {
         url.searchParams.append('token', token)
@@ -415,7 +421,7 @@ export default function Home() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ campaign_id: campaignId, limit: 200 }),
+        body: JSON.stringify({ campaign_id: campaignId, limit: 200, ignore_delay: ignoreSequenceDelays }),
       })
       const data = await res.json()
       setOutreachLogs(prev => [...prev, withLogTimestamp({
@@ -534,6 +540,20 @@ export default function Home() {
                       )}
                     </div>
                   </div>
+                  <label className="flex items-start gap-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm dark:border-zinc-700 dark:bg-zinc-800/70">
+                    <input
+                      type="checkbox"
+                      checked={ignoreSequenceDelays}
+                      onChange={(e) => setIgnoreSequenceDelays(e.target.checked)}
+                      className="mt-1 h-4 w-4 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-500"
+                    />
+                    <span>
+                      <span className="block font-medium text-zinc-800 dark:text-zinc-100">Ignore sequence delays</span>
+                      <span className="block text-xs text-zinc-500 dark:text-zinc-400">
+                        Test runs can create the next eligible step immediately.
+                      </span>
+                    </span>
+                  </label>
                   <button
                     onClick={startOutreach}
                     disabled={isStreaming || !canRunOutreach}
@@ -806,6 +826,7 @@ export default function Home() {
                 <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">Upcoming Follow-ups</h3>
                 <p className="text-sm text-zinc-600 dark:text-zinc-400">
                   Time-based follow-ups for leads that have not replied. Webhooks do not trigger these because no inbound email occurs.
+                  {ignoreSequenceDelays && <span className="block text-amber-600 dark:text-amber-300">Sequence delays are ignored for this view and generation run.</span>}
                 </p>
               </div>
               <div className="flex gap-2">
@@ -855,7 +876,9 @@ export default function Home() {
                           <td className="px-3 py-3">{formatTimestamp(item.due_at, organizationTimezone)}</td>
                           <td className="px-3 py-3">
                             {item.is_due ? (
-                              <span className="px-2 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">Due now</span>
+                              <span className={`px-2 py-1 rounded-full text-xs font-medium ${item.delay_ignored ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300' : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'}`}>
+                                {item.delay_ignored ? 'Due by test mode' : 'Due now'}
+                              </span>
                             ) : item.existing_message_id ? (
                               <span className="px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
                                 {item.existing_message_status} #{item.existing_message_id}

@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import sqlite3
 from contextlib import nullcontext
 from types import SimpleNamespace
@@ -323,6 +324,99 @@ def test_claim_next_outreach_touch_uses_step_number_not_step_row_id(tmp_path, mo
 
     assert row["sequence_step_id"] == 38
     assert row["channel"] == "email"
+
+
+def test_claim_next_outreach_touch_can_ignore_delay_for_testing(tmp_path, monkeypatch):
+    db_path = tmp_path / "outreach-ignore-delay.sqlite3"
+    recent = datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    with _connect(db_path) as conn:
+        conn.executescript(
+            f"""
+            CREATE TABLE leads (id INTEGER, email TEXT, phone_number TEXT, linkedin_url TEXT, status TEXT, touch_count INTEGER, email_opt_out INTEGER);
+            INSERT INTO leads VALUES (7, 'gabrielle@example.com', '+254700000000', 'https://linkedin.com/in/gabrielle', 'CONTACTED', 1, 0);
+
+            CREATE TABLE campaign_leads (
+                campaign_id INTEGER,
+                lead_id INTEGER,
+                responded INTEGER,
+                meeting_booked INTEGER,
+                emails_sent INTEGER
+            );
+            INSERT INTO campaign_leads VALUES (42, 7, 0, 0, 1);
+
+            CREATE TABLE email_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                organization_id INTEGER NOT NULL,
+                lead_id INTEGER NOT NULL,
+                campaign_id INTEGER,
+                sequence_step_id INTEGER,
+                direction TEXT NOT NULL,
+                subject TEXT,
+                body TEXT,
+                status TEXT,
+                processed INTEGER NOT NULL DEFAULT 0,
+                approved INTEGER NOT NULL DEFAULT 0,
+                channel TEXT,
+                created_at TEXT,
+                sent_at TEXT
+            );
+
+            CREATE TABLE campaign_sequences (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                campaign_id INTEGER,
+                step_number INTEGER,
+                channel TEXT,
+                delay_days INTEGER,
+                prompt_context TEXT
+            );
+            INSERT INTO campaign_sequences (campaign_id, step_number, channel, delay_days)
+            VALUES (42, 1, 'whatsapp', 0), (42, 2, 'email', 3);
+
+            CREATE TABLE campaign_sequence_steps (
+                id INTEGER PRIMARY KEY,
+                campaign_id INTEGER,
+                step_number INTEGER,
+                delay_days INTEGER,
+                subject_template TEXT,
+                body_template TEXT,
+                active INTEGER,
+                created_at TEXT
+            );
+            INSERT INTO campaign_sequence_steps (id, campaign_id, step_number, delay_days, active)
+            VALUES (37, 42, 1, 0, 1), (38, 42, 2, 3, 1);
+
+            INSERT INTO email_messages (
+                organization_id, lead_id, campaign_id, sequence_step_id, direction,
+                subject, body, status, processed, approved, channel, created_at, sent_at
+            ) VALUES (
+                1, 7, 42, 37, 'outbound',
+                '', 'Sent WhatsApp', 'SENT', 1, 1, 'whatsapp',
+                '{recent}', '{recent}'
+            );
+            """
+        )
+
+    monkeypatch.setattr(marketing_agent, "get_conn", lambda: _connect(db_path))
+
+    blocked = marketing_agent._claim_next_outreach_touch(
+        organization_id=1,
+        campaign_id=42,
+        lead_id=7,
+        lead_email="gabrielle@example.com",
+    )
+    bypassed = marketing_agent._claim_next_outreach_touch(
+        organization_id=1,
+        campaign_id=42,
+        lead_id=7,
+        lead_email="gabrielle@example.com",
+        ignore_delay=True,
+    )
+
+    assert blocked["claimed"] is False
+    assert blocked["code"] == "delay_not_passed"
+    assert bypassed["claimed"] is True
+    assert bypassed["step"]["step_number"] == 2
+    assert bypassed["step"]["delay_ignored"] is True
 
 
 def test_claim_next_outreach_touch_uses_campaign_progress_after_failed_touch(tmp_path, monkeypatch):

@@ -210,7 +210,13 @@ def replace_sequence_steps(campaign_id: int, steps: list[dict[str, Any]], organi
     return list_sequence_steps(campaign_id)
 
 
-def generate_due_followup_drafts(campaign_id: int | None = None, limit: int = 50, organization_id: int | None = None) -> dict[str, Any]:
+def generate_due_followup_drafts(
+    campaign_id: int | None = None,
+    limit: int = 50,
+    organization_id: int | None = None,
+    *,
+    ignore_delay: bool = False,
+) -> dict[str, Any]:
     """Create follow-up drafts for leads whose next active sequence step is due."""
     generated: list[dict[str, Any]] = []
     skipped = 0
@@ -254,7 +260,9 @@ def generate_due_followup_drafts(campaign_id: int | None = None, limit: int = 50
             for row in rows:
                 item = dict_from_row(row) or {}
                 last_contacted = _parse_dt(item.get("last_contacted_at"))
-                if not last_contacted or now - last_contacted < datetime.timedelta(days=int(item["delay_days"])):
+                if not ignore_delay and (
+                    not last_contacted or now - last_contacted < datetime.timedelta(days=int(item["delay_days"]))
+                ):
                     skipped += 1
                     continue
                 duplicate = conn.execute(
@@ -312,6 +320,7 @@ def generate_due_followup_drafts(campaign_id: int | None = None, limit: int = 50
                         "sequence_step_id": item["sequence_step_id"],
                         "step_number": item["step_number"],
                         "channel": channel,
+                        "delay_ignored": bool(ignore_delay),
                     }
                 )
             if generated:
@@ -328,7 +337,13 @@ def generate_due_followup_drafts(campaign_id: int | None = None, limit: int = 50
     }
 
 
-def list_upcoming_followups(campaign_id: int | None = None, limit: int = 100, organization_id: int | None = None) -> dict[str, Any]:
+def list_upcoming_followups(
+    campaign_id: int | None = None,
+    limit: int = 100,
+    organization_id: int | None = None,
+    *,
+    ignore_delay: bool = False,
+) -> dict[str, Any]:
     """List leads whose next follow-up sequence step is pending or due."""
     if campaign_id is None:
         ensure_default_steps_for_active_campaigns(organization_id)
@@ -379,12 +394,14 @@ def list_upcoming_followups(campaign_id: int | None = None, limit: int = 100, or
             )
             due_at = due_at_dt.replace(microsecond=0).isoformat().replace("+00:00", "Z") if due_at_dt else None
             item["due_at"] = due_at
-            item["is_due"] = bool(due_at_dt and due_at_dt <= now and not duplicate)
+            normally_due = bool(due_at_dt and due_at_dt <= now)
+            item["delay_ignored"] = bool(ignore_delay and due_at_dt and due_at_dt > now and not duplicate)
+            item["is_due"] = bool((normally_due or ignore_delay) and not duplicate)
             item["blocked_reason"] = (
                 "existing_draft_or_sent"
                 if duplicate
                 else "missing_last_contacted"
-                if not last_contacted
+                if not ignore_delay and not last_contacted
                 else None
             )
             if duplicate:

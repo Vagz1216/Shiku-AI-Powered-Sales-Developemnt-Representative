@@ -2899,19 +2899,26 @@ class FollowupGenerateRequest(BaseModel):
 
     campaign_id: Optional[int] = None
     limit: int = 50
+    ignore_delay: bool = False
 
 
 @app.get("/api/followups/upcoming")
 async def list_upcoming_followups(
     campaign_id: Optional[int] = None,
     limit: int = 100,
+    ignore_delay: bool = False,
     user: dict = Depends(get_current_user),
     organization_id: Optional[int] = None,
 ):
     """List upcoming and due follow-up sequence candidates without creating drafts."""
     try:
         resolved_org_id = _org_id(user, organization_id, tenant_service.READ_ROLES)
-        return sequence_service.list_upcoming_followups(campaign_id=campaign_id, limit=limit, organization_id=resolved_org_id)
+        return sequence_service.list_upcoming_followups(
+            campaign_id=campaign_id,
+            limit=limit,
+            organization_id=resolved_org_id,
+            ignore_delay=ignore_delay,
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -2940,6 +2947,7 @@ async def generate_due_followups(
                     campaign_id=request.campaign_id,
                     limit=remaining,
                     organization_id=org_id,
+                    ignore_delay=request.ignore_delay,
                 )
                 combined["generated"] += result.get("generated", 0)
                 combined["skipped"] += result.get("skipped", 0)
@@ -2951,6 +2959,7 @@ async def generate_due_followups(
             campaign_id=request.campaign_id,
             limit=request.limit,
             organization_id=resolved_org_id,
+            ignore_delay=request.ignore_delay,
         )
         await outbound_event_service.emit_event("followup_drafts_generated", result)
         return result
@@ -3151,6 +3160,7 @@ async def list_audit_streams(user: dict = Depends(get_current_user)):
 @app.get("/api/outreach/stream")
 async def stream_outreach(
     campaign_name: Optional[str] = None,
+    ignore_delay: bool = False,
     user: dict = Depends(get_current_user),
     organization_id: Optional[int] = None,
 ):
@@ -3183,7 +3193,8 @@ async def stream_outreach(
                 outreach_orchestrator.execute_campaign(
                     campaign_name=campaign_name, 
                     organization_id=resolved_org_id,
-                    callback=sse_callback
+                    callback=sse_callback,
+                    ignore_delay=ignore_delay,
                 )
             )
 
@@ -3216,13 +3227,19 @@ async def stream_outreach(
 async def execute_marketing_campaign(
     background_tasks: BackgroundTasks,
     campaign_name: Optional[str] = None,
+    ignore_delay: bool = False,
     user: dict = Depends(get_current_user),
     organization_id: Optional[int] = None,
 ) -> dict:
     """Execute intelligent outreach campaign via Orchestrator (database-driven)."""
     try:
         resolved_org_id = _workflow_org_id(user, organization_id, tenant_service.WORKFLOW_ROLES)
-        background_tasks.add_task(outreach_orchestrator.execute_campaign, campaign_name, resolved_org_id)
+        background_tasks.add_task(
+            outreach_orchestrator.execute_campaign,
+            campaign_name=campaign_name,
+            organization_id=resolved_org_id,
+            ignore_delay=ignore_delay,
+        )
         return {
             "status": "accepted", 
             "message": f"Campaign execution started in background for {campaign_name or 'random active campaign'}"

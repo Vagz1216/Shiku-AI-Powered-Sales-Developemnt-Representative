@@ -64,7 +64,14 @@ def _channel_prerequisite_error(channel: str, lead: dict[str, Any]) -> str | Non
     return None
 
 
-def _find_next_sequence_step(conn, organization_id: int, campaign_id: int, lead_id: int) -> dict[str, Any] | None:
+def _find_next_sequence_step(
+    conn,
+    organization_id: int,
+    campaign_id: int,
+    lead_id: int,
+    *,
+    ignore_delay: bool = False,
+) -> dict[str, Any] | None:
     # 1. Check global opt-out (the only truly global halt signal — legal/preference)
     lead_row = conn.execute(
         "SELECT email, phone_number, linkedin_url, email_opt_out FROM leads WHERE id = ?",
@@ -168,7 +175,7 @@ def _find_next_sequence_step(conn, organization_id: int, campaign_id: int, lead_
         )
     
     # 4. Check delay
-    if last_time and seq.get("delay_days", 0) > 0:
+    if last_time and seq.get("delay_days", 0) > 0 and not ignore_delay:
         days_passed = (datetime.datetime.now(datetime.UTC) - last_time).days
         if days_passed < seq["delay_days"]:
             due_at = last_time + datetime.timedelta(days=int(seq["delay_days"]))
@@ -176,6 +183,8 @@ def _find_next_sequence_step(conn, organization_id: int, campaign_id: int, lead_
                 f"Step {seq.get('step_number')} is waiting for the delay window. Due at {due_at.replace(microsecond=0).isoformat()}.",
                 code="delay_not_passed",
             )
+    if last_time and seq.get("delay_days", 0) > 0 and ignore_delay:
+        seq["delay_ignored"] = True
 
     return seq
 
@@ -279,6 +288,7 @@ def _claim_next_outreach_touch(
     campaign_id: int,
     lead_id: int | None,
     lead_email: str | None,
+    ignore_delay: bool = False,
 ) -> dict[str, Any]:
     """Reserve the next campaign sequence touch before LLM generation to prevent duplicate sends."""
     if not lead_id:
@@ -289,7 +299,13 @@ def _claim_next_outreach_touch(
                 skipped_steps: list[dict[str, Any]] = []
                 next_step: dict[str, Any] | None = None
                 for _attempt in range(5):
-                    candidate = _find_next_sequence_step(conn, organization_id, campaign_id, lead_id)
+                    candidate = _find_next_sequence_step(
+                        conn,
+                        organization_id,
+                        campaign_id,
+                        lead_id,
+                        ignore_delay=ignore_delay,
+                    )
                     if not candidate:
                         return {"claimed": False, "error": "No eligible sequence step found."}
                     if candidate.get("eligible", True):
@@ -411,7 +427,8 @@ class OutreachOrchestrator:
         self, 
         campaign_name: Optional[str] = None,
         organization_id: int | None = None,
-        callback: Optional[SSECallback] = None
+        callback: Optional[SSECallback] = None,
+        ignore_delay: bool = False,
     ) -> Dict[str, Any]:
         """Execute a complete database-driven outreach campaign via Worker Agents."""
         msg = f"Starting Orchestrator for campaign. Target: {campaign_name or 'Random'}"
@@ -474,6 +491,11 @@ class OutreachOrchestrator:
                 logger.info(approval_msg)
                 if callback:
                     await callback("info", approval_msg)
+                if ignore_delay:
+                    delay_msg = "Testing mode: sequence delay windows are ignored for this outreach run."
+                    logger.info(delay_msg)
+                    if callback:
+                        await callback("warning", delay_msg)
                 
                 # 2. Get campaign-scoped eligible leads
                 requested_max = campaign.max_leads_per_campaign or settings.max_leads_per_campaign
@@ -560,6 +582,7 @@ class OutreachOrchestrator:
                             campaign_id=campaign.id,
                             lead_id=lead_data.get("id"),
                             lead_email=lead_info["email"],
+                            ignore_delay=ignore_delay,
                         )
                         if not claim.get("claimed"):
                             skipped_count += 1

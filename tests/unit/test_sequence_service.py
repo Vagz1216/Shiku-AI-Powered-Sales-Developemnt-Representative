@@ -1,4 +1,5 @@
 import sqlite3
+import datetime
 
 from services import sequence_service
 
@@ -163,6 +164,27 @@ def test_generate_due_followup_drafts_uses_configured_next_channel(monkeypatch):
     assert result["drafts"][0]["channel"] == "whatsapp"
     assert row["sequence_step_id"] == 100
     assert row["channel"] == "whatsapp"
+
+
+def test_generate_due_followup_drafts_can_ignore_delay_for_testing(monkeypatch):
+    conn = _conn()
+    recent = datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    conn.execute("UPDATE leads SET last_contacted_at = ? WHERE id = 1", (recent,))
+    conn.execute("UPDATE campaign_sequence_steps SET delay_days = 3 WHERE campaign_id = 10 AND step_number = 2")
+    monkeypatch.setattr(sequence_service, "get_conn", lambda: DummyConn(conn))
+
+    blocked = sequence_service.generate_due_followup_drafts(campaign_id=10)
+    bypassed = sequence_service.generate_due_followup_drafts(campaign_id=10, ignore_delay=True)
+
+    row = conn.execute("SELECT sequence_step_id, status, channel FROM email_messages").fetchone()
+
+    assert blocked["generated"] == 0
+    assert blocked["skipped"] == 1
+    assert bypassed["generated"] == 1
+    assert bypassed["drafts"][0]["delay_ignored"] is True
+    assert row["sequence_step_id"] == 101
+    assert row["status"] == "DRAFT"
+    assert row["channel"] == "email"
 
 
 def test_replace_sequence_steps_preserves_referenced_step_ids(monkeypatch):
