@@ -16,8 +16,9 @@ from typing import Any
 from config import settings
 from schema import SendEmailResult
 from services import mailbox_oauth_service
-from services.resend_email import send_resend_email, send_resend_reply
+from services.resend_email import send_resend_email
 from services.tenant_service import decrypt_secret
+from utils.quick_replies import plain_text_to_basic_html
 from utils.db_connection import dict_from_row, get_conn
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,46 @@ def _smtp_local_hostname(mailbox: dict[str, Any]) -> str | None:
         return configured
     host = str(mailbox.get("smtp_host") or "").strip()
     return host or None
+
+
+def _truthy_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value == 1
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return False
+
+
+def _append_mailbox_signature(
+    body: str,
+    html_body: str | None,
+    mailbox: dict[str, Any],
+) -> tuple[str, str | None]:
+    """Append the configured mailbox signature to outbound message bodies."""
+    if not _truthy_flag(mailbox.get("signature_enabled")):
+        return body, html_body
+
+    signature_text = str(mailbox.get("signature_text") or "").strip()
+    signature_html = str(mailbox.get("signature_html") or "").strip()
+    if not signature_text and signature_html:
+        signature_text = _html_to_text(signature_html)
+    if not signature_text and not signature_html:
+        return body, html_body
+
+    signed_body = body
+    if signature_text:
+        signed_body = f"{body.rstrip()}\n\n{signature_text}".strip()
+
+    signed_html = html_body
+    if signature_html:
+        base_html = html_body or plain_text_to_basic_html(body)
+        signed_html = f"{base_html.rstrip()}<br><br>{signature_html}"
+    elif html_body and signature_text:
+        signed_html = f"{html_body.rstrip()}<br><br>{plain_text_to_basic_html(signature_text)}"
+
+    return signed_body, signed_html
 
 
 def validate_mailbox_config(
@@ -68,6 +109,7 @@ def send_mailbox_email(
         mailbox = _resolve_mailbox(mailbox_id, organization_id=organization_id)
         if error := _mailbox_daily_limit_error(mailbox):
             return SendEmailResult(ok=False, error=error)
+        body, html_body = _append_mailbox_signature(body, html_body, mailbox)
         if mailbox["provider"] == "resend":
             return send_resend_email(
                 email=email,
@@ -118,15 +160,29 @@ def send_mailbox_reply(
 ) -> dict[str, Any]:
     mailbox = _resolve_mailbox(mailbox_id, organization_id=organization_id)
     if mailbox["provider"] == "resend":
-        return send_resend_reply(
-            to_email=to_email,
-            message=message,
-            message_id=message_id,
-            subject=subject,
+        message, html_body = _append_mailbox_signature(message, None, mailbox)
+        headers = {}
+        if message_id:
+            headers["In-Reply-To"] = message_id
+            headers["References"] = message_id
+        result = send_resend_email(
+            email=to_email,
+            name="",
+            subject=subject or "Re: Your Message",
+            body=message,
+            html_body=html_body,
+            headers=headers or None,
             api_key=decrypt_secret(mailbox.get("resend_api_key_secret")),
             from_email=_from_address(mailbox),
             reply_to=mailbox.get("resend_reply_to"),
         )
+        return {
+            "success": result.ok,
+            "message_id": result.message_id,
+            "thread_id": message_id or result.message_id,
+            "method": "resend_reply" if message_id else "resend_new_message",
+            "error": result.error,
+        }
     headers = {}
     if message_id:
         headers["In-Reply-To"] = message_id

@@ -1319,18 +1319,22 @@ def create_mailbox(organization_id: int, data: dict[str, Any], actor_claims: dic
         with conn:
             cur = conn.execute(
                 "INSERT INTO mailbox_connections "
-                "(organization_id, provider, display_name, sender_display_name, company_display_name, email_address, status, "
+                "(organization_id, provider, display_name, sender_display_name, company_display_name, "
+                "signature_enabled, signature_text, signature_html, email_address, status, "
                 "smtp_host, smtp_port, smtp_use_ssl, smtp_username, smtp_password_secret, "
                 "imap_host, imap_port, imap_use_ssl, imap_username, imap_password_secret, "
                 "resend_domain, resend_from_email, resend_reply_to, resend_api_key_secret, "
                 "resend_webhook_secret_secret, daily_limit, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     organization_id,
                     provider,
                     _optional_text(data.get("display_name")),
                     _optional_text(data.get("sender_display_name")),
                     _optional_text(data.get("company_display_name")),
+                    1 if data.get("signature_enabled") else 0,
+                    _optional_text(data.get("signature_text")),
+                    _optional_text(data.get("signature_html")),
                     email_address,
                     data.get("smtp_host"),
                     data.get("smtp_port"),
@@ -1446,7 +1450,8 @@ def update_mailbox(
         with conn:
             conn.execute(
                 "UPDATE mailbox_connections SET "
-                "provider = ?, display_name = ?, sender_display_name = ?, company_display_name = ?, email_address = ?, status = 'PENDING', "
+                "provider = ?, display_name = ?, sender_display_name = ?, company_display_name = ?, "
+                "signature_enabled = ?, signature_text = ?, signature_html = ?, email_address = ?, status = 'PENDING', "
                 "smtp_host = ?, smtp_port = ?, smtp_use_ssl = ?, smtp_username = ?, smtp_password_secret = ?, "
                 "imap_host = ?, imap_port = ?, imap_use_ssl = ?, imap_username = ?, imap_password_secret = ?, "
                 "resend_domain = ?, resend_from_email = ?, resend_reply_to = ?, resend_api_key_secret = ?, "
@@ -1457,6 +1462,9 @@ def update_mailbox(
                     _optional_text(data.get("display_name")),
                     _optional_text(data.get("sender_display_name")),
                     _optional_text(data.get("company_display_name")),
+                    1 if data.get("signature_enabled") else 0,
+                    _optional_text(data.get("signature_text")),
+                    _optional_text(data.get("signature_html")),
                     email_address,
                     data.get("smtp_host") if provider == "smtp_imap" else None,
                     data.get("smtp_port") if provider == "smtp_imap" else None,

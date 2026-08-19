@@ -31,6 +31,9 @@ interface Mailbox {
   display_name: string | null
   sender_display_name: string | null
   company_display_name: string | null
+  signature_enabled: number | boolean
+  signature_text: string | null
+  signature_html: string | null
   email_address: string
   status: string
   smtp_host: string | null
@@ -62,6 +65,9 @@ interface MailboxForm {
   display_name: string
   sender_display_name: string
   company_display_name: string
+  signature_enabled: boolean
+  signature_text: string
+  signature_html: string
   email_address: string
   smtp_host: string
   smtp_port: string
@@ -145,6 +151,9 @@ function emptyForm(): MailboxForm {
     display_name: '',
     sender_display_name: '',
     company_display_name: '',
+    signature_enabled: false,
+    signature_text: '',
+    signature_html: '',
     email_address: '',
     smtp_host: '',
     smtp_port: '465',
@@ -175,6 +184,9 @@ function formFromMailbox(mailbox: Mailbox): MailboxForm {
     display_name: mailbox.display_name || '',
     sender_display_name: mailbox.sender_display_name || '',
     company_display_name: mailbox.company_display_name || '',
+    signature_enabled: Boolean(mailbox.signature_enabled),
+    signature_text: mailbox.signature_text || '',
+    signature_html: mailbox.signature_html || '',
     email_address: mailbox.email_address || '',
     smtp_host: mailbox.smtp_host || '',
     smtp_port: mailbox.smtp_port ? String(mailbox.smtp_port) : '465',
@@ -405,6 +417,9 @@ export default function MailboxesPage() {
         display_name: form.display_name,
         sender_display_name: form.sender_display_name,
         company_display_name: form.company_display_name,
+        signature_enabled: form.signature_enabled,
+        signature_text: form.signature_text || null,
+        signature_html: form.signature_html || null,
         email_address: form.email_address,
         smtp_host: form.provider === 'smtp_imap' ? form.smtp_host : null,
         smtp_port: form.provider === 'smtp_imap' ? Number(form.smtp_port) : null,
@@ -561,6 +576,9 @@ export default function MailboxesPage() {
           display_name: form.display_name || undefined,
           sender_display_name: form.sender_display_name || undefined,
           company_display_name: form.company_display_name || undefined,
+          signature_enabled: form.signature_enabled,
+          signature_text: form.signature_text || undefined,
+          signature_html: form.signature_html || undefined,
           daily_limit: Number(form.daily_limit || 100),
         }),
       })
@@ -719,6 +737,33 @@ export default function MailboxesPage() {
                 </div>
               )}
               <TextField label="Daily limit" value={form.daily_limit} onChange={(value) => updateForm('daily_limit', value)} type="number" />
+              <div className="md:col-span-2 border border-zinc-200 rounded-md p-4 dark:border-zinc-700">
+                <label className="flex items-center gap-2 text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                  <input
+                    type="checkbox"
+                    checked={form.signature_enabled}
+                    onChange={(event) => updateForm('signature_enabled', event.target.checked)}
+                  />
+                  Append mailbox signature to outbound emails
+                </label>
+                <p className="mt-1 text-xs text-zinc-500">
+                  SMTP sends do not use the webmail identity signature. Add it here if every app-sent email should include it.
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                  <TextAreaField
+                    label="Plain-text signature"
+                    value={form.signature_text}
+                    onChange={(value) => updateForm('signature_text', value)}
+                    rows={5}
+                  />
+                  <TextAreaField
+                    label="HTML signature"
+                    value={form.signature_html}
+                    onChange={(value) => updateForm('signature_html', value)}
+                    rows={5}
+                  />
+                </div>
+              </div>
 
               {form.provider === 'smtp_imap' && <div className="flex items-end gap-5 pb-2">
                 <label className="flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300">
@@ -804,6 +849,9 @@ export default function MailboxesPage() {
                         <div className="text-xs text-zinc-500">{mailbox.email_address}</div>
                         <div className="text-xs text-zinc-500">
                           Sender: {mailbox.sender_display_name || 'user fallback'} / {mailbox.company_display_name || selectedOrganization?.name || 'organization fallback'}
+                        </div>
+                        <div className="text-xs text-zinc-500">
+                          Signature: {Boolean(mailbox.signature_enabled) ? 'enabled' : 'off'}
                         </div>
                       </td>
                       <td className="px-4 py-3">
@@ -949,6 +997,30 @@ function PasswordField({
         className="w-full px-3 py-2 border border-zinc-300 rounded-md bg-white dark:bg-zinc-950 dark:border-zinc-700"
         autoComplete="new-password"
         required={required}
+      />
+    </label>
+  )
+}
+
+function TextAreaField({
+  label,
+  value,
+  onChange,
+  rows = 4,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+  rows?: number
+}) {
+  return (
+    <label className="block">
+      <span className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">{label}</span>
+      <textarea
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        rows={rows}
+        className="w-full px-3 py-2 border border-zinc-300 rounded-md bg-white dark:bg-zinc-950 dark:border-zinc-700 font-mono text-xs"
       />
     </label>
   )

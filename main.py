@@ -183,6 +183,9 @@ class MailboxOAuthStartRequest(BaseModel):
     display_name: str | None = None
     sender_display_name: str | None = None
     company_display_name: str | None = None
+    signature_enabled: bool = False
+    signature_text: str | None = None
+    signature_html: str | None = None
     daily_limit: int = 100
 _scheduled_sender_task: asyncio.Task | None = None
 _mailbox_sync_task: asyncio.Task | None = None

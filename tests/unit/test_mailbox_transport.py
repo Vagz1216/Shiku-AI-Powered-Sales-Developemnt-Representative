@@ -135,6 +135,47 @@ def test_send_mailbox_email_uses_tenant_resend_credentials(monkeypatch):
     assert captured["reply_to"] == "reply@tenant.test"
 
 
+def test_send_mailbox_email_appends_mailbox_signature(monkeypatch):
+    captured = {}
+
+    monkeypatch.setattr(
+        mailbox_transport,
+        "_resolve_mailbox",
+        lambda mailbox_id=None, organization_id=None, provider=None: {
+            "id": 7,
+            "organization_id": organization_id or 2,
+            "provider": "resend",
+            "email_address": "sdr@tenant.test",
+            "sender_display_name": "Alex",
+            "resend_from_email": "sdr@tenant.test",
+            "resend_api_key_secret": "local:cmVfdGVuYW50",
+            "daily_limit": 0,
+            "signature_enabled": 1,
+            "signature_text": "Alex\nStayEZ",
+            "signature_html": "<strong>Alex</strong><br><span>StayEZ</span>",
+        },
+    )
+
+    def fake_send_resend_email(**kwargs):
+        captured.update(kwargs)
+        return SendEmailResult(ok=True, message_id="email_tenant")
+
+    monkeypatch.setattr(mailbox_transport, "send_resend_email", fake_send_resend_email)
+
+    result = mailbox_transport.send_mailbox_email(
+        email="lead@example.com",
+        name="Lead",
+        subject="Hello",
+        body="Body",
+        html_body="<p>Body</p>",
+        organization_id=2,
+    )
+
+    assert result.ok is True
+    assert captured["body"] == "Body\n\nAlex\nStayEZ"
+    assert captured["html_body"] == "<p>Body</p><br><br><strong>Alex</strong><br><span>StayEZ</span>"
+
+
 def test_mailbox_daily_limit_uses_portable_date_filter(tmp_path, monkeypatch):
     db_path = tmp_path / "mailbox-limit.sqlite3"
     today = datetime.date.today().isoformat()

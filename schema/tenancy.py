@@ -143,6 +143,9 @@ class MailboxCreate(BaseModel):
     display_name: str | None = Field(default=None, max_length=120)
     sender_display_name: str | None = Field(default=None, max_length=120)
     company_display_name: str | None = Field(default=None, max_length=120)
+    signature_enabled: bool = False
+    signature_text: str | None = Field(default=None, max_length=4000)
+    signature_html: str | None = Field(default=None, max_length=8000)
     email_address: str
     daily_limit: int = Field(default=100, ge=1, le=5000)
 

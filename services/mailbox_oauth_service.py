@@ -67,6 +67,9 @@ def build_authorization_url(
             "display_name": data.get("display_name"),
             "sender_display_name": data.get("sender_display_name"),
             "company_display_name": data.get("company_display_name"),
+            "signature_enabled": bool(data.get("signature_enabled")),
+            "signature_text": data.get("signature_text"),
+            "signature_html": data.get("signature_html"),
             "daily_limit": int(data.get("daily_limit") or 100),
             "nonce": secrets.token_urlsafe(16),
             "exp": int(datetime.datetime.now(datetime.UTC).timestamp()) + 900,
@@ -124,6 +127,9 @@ def complete_authorization(
         display_name=payload.get("display_name") or account.get("name") or email_address,
         sender_display_name=payload.get("sender_display_name"),
         company_display_name=payload.get("company_display_name"),
+        signature_enabled=bool(payload.get("signature_enabled")),
+        signature_text=payload.get("signature_text"),
+        signature_html=payload.get("signature_html"),
         email_address=email_address,
         daily_limit=int(payload.get("daily_limit") or 100),
         access_token=token_data["access_token"],
@@ -388,6 +394,9 @@ def _upsert_oauth_mailbox(
     display_name: str,
     sender_display_name: str | None,
     company_display_name: str | None,
+    signature_enabled: bool,
+    signature_text: str | None,
+    signature_html: str | None,
     email_address: str,
     daily_limit: int,
     access_token: str,
@@ -412,6 +421,9 @@ def _upsert_oauth_mailbox(
                 display_name,
                 sender_display_name,
                 company_display_name,
+                1 if signature_enabled else 0,
+                signature_text,
+                signature_html,
                 email_address,
                 tenant_service.encrypt_secret(access_token),
                 tenant_service.encrypt_secret(refresh_token),
@@ -424,7 +436,8 @@ def _upsert_oauth_mailbox(
             if existing:
                 mailbox_id = int(existing["id"])
                 conn.execute(
-                    "UPDATE mailbox_connections SET provider = ?, display_name = ?, sender_display_name = ?, company_display_name = ?, email_address = ?, status = 'CONNECTED', "
+                    "UPDATE mailbox_connections SET provider = ?, display_name = ?, sender_display_name = ?, company_display_name = ?, "
+                    "signature_enabled = ?, signature_text = ?, signature_html = ?, email_address = ?, status = 'CONNECTED', "
                     "smtp_host = NULL, smtp_port = NULL, smtp_username = NULL, smtp_password_secret = NULL, "
                     "imap_host = NULL, imap_port = NULL, imap_username = NULL, imap_password_secret = NULL, "
                     "resend_domain = NULL, resend_from_email = NULL, resend_reply_to = NULL, "
@@ -437,10 +450,11 @@ def _upsert_oauth_mailbox(
             else:
                 cur = conn.execute(
                     "INSERT INTO mailbox_connections "
-                    "(organization_id, provider, display_name, sender_display_name, company_display_name, email_address, status, "
+                    "(organization_id, provider, display_name, sender_display_name, company_display_name, "
+                    "signature_enabled, signature_text, signature_html, email_address, status, "
                     "oauth_access_token_secret, oauth_refresh_token_secret, oauth_token_expires_at, "
                     "oauth_scopes, oauth_external_account_id, daily_limit, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, 'CONNECTED', ?, ?, ?, ?, ?, ?, ?)",
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'CONNECTED', ?, ?, ?, ?, ?, ?, ?)",
                     (organization_id,) + values,
                 )
                 mailbox_id = cur.lastrowid
