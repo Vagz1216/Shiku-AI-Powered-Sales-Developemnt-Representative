@@ -385,7 +385,7 @@ class DBLeadProvider(LeadProvider):
                     AND em.campaign_id = c.id
                     AND em.lead_id = l.id
                     AND em.direction = 'outbound'
-                    AND UPPER(COALESCE(em.status, '')) IN ('DRAFT', 'SCHEDULED', 'GENERATING')
+                    AND UPPER(COALESCE(em.status, '')) IN ('DRAFT', 'SCHEDULED', 'SENDING', 'GENERATING')
               )
             """
             group_sql = (
@@ -411,7 +411,7 @@ class DBLeadProvider(LeadProvider):
                     AND em.campaign_id = c.id
                     AND em.lead_id = l.id
                     AND em.direction = 'outbound'
-                    AND UPPER(COALESCE(em.status, '')) IN ('DRAFT', 'SCHEDULED', 'GENERATING')
+                    AND UPPER(COALESCE(em.status, '')) IN ('DRAFT', 'SCHEDULED', 'SENDING', 'GENERATING')
               )
             """
             group_sql = "GROUP BY l.id"

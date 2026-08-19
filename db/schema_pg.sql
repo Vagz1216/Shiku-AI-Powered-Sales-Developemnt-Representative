@@ -329,6 +329,7 @@ CREATE TABLE IF NOT EXISTS email_messages (
     approved_by TEXT,
     approved_at TIMESTAMP,
     scheduled_send_at TIMESTAMP,
+    scheduled_claimed_at TIMESTAMP,
     sent_at TIMESTAMP,
     send_attempts INTEGER NOT NULL DEFAULT 0,
     last_error TEXT,
@@ -458,7 +459,7 @@ ON email_messages(organization_id, campaign_id, lead_id)
 WHERE direction = 'outbound'
   AND sequence_step_id IS NULL
   AND campaign_id IS NOT NULL
-  AND UPPER(COALESCE(status, '')) IN ('DRAFT','SCHEDULED','SENT','GENERATING');
+  AND UPPER(COALESCE(status, '')) IN ('DRAFT','SCHEDULED','SENDING','SENT','GENERATING');
 CREATE INDEX IF NOT EXISTS idx_events_org ON events(organization_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_campaign_leads_lead_id ON campaign_leads(lead_id);
 CREATE INDEX IF NOT EXISTS idx_campaign_lead_contexts_lead ON campaign_lead_contexts(lead_id);

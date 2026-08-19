@@ -10,7 +10,7 @@ import smtplib
 from email import policy
 from email.message import EmailMessage
 from email.parser import BytesParser
-from email.utils import formataddr, make_msgid, parseaddr, parsedate_to_datetime
+from email.utils import format_datetime, formataddr, make_msgid, parseaddr, parsedate_to_datetime
 from typing import Any
 
 from config import settings
@@ -31,6 +31,14 @@ def _from_address(mailbox: dict[str, Any]) -> str:
         if parsed_email:
             return formataddr((sender_name, parsed_email))
     return str(from_email or "")
+
+
+def _smtp_local_hostname(mailbox: dict[str, Any]) -> str | None:
+    configured = (settings.smtp_helo_hostname or "").strip()
+    if configured:
+        return configured
+    host = str(mailbox.get("smtp_host") or "").strip()
+    return host or None
 
 
 def validate_mailbox_config(
@@ -678,6 +686,7 @@ def _send_via_smtp(
     msg["To"] = formataddr((to_name, to_email)) if to_name else to_email
     msg["Subject"] = subject
     msg["Message-ID"] = message_id
+    msg["Date"] = format_datetime(datetime.datetime.now(datetime.UTC), usegmt=True)
     for key, value in (headers or {}).items():
         if value:
             msg[key] = value
@@ -688,7 +697,7 @@ def _send_via_smtp(
         _attach_payload(msg, attachment)
 
     smtp_cls = smtplib.SMTP_SSL if mailbox["smtp_use_ssl"] else smtplib.SMTP
-    client = smtp_cls(host, port, timeout=30)
+    client = smtp_cls(host, port, timeout=30, local_hostname=_smtp_local_hostname(mailbox))
     try:
         if not mailbox["smtp_use_ssl"]:
             client.starttls()

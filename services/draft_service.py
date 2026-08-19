@@ -12,13 +12,8 @@ from uuid import uuid4
 from config import settings
 from tools.send_email import send_plain_email
 from utils.db_connection import get_conn
-from utils.quick_replies import (
-    clean_quick_reply_text,
-    has_quick_reply_block,
-    plain_text_to_basic_html,
-    quick_replies_html_for_outreach,
-    strip_quick_reply_block,
-)
+from utils.email_deliverability import normalize_outreach_subject
+from utils.quick_replies import clean_quick_reply_text, plain_text_to_basic_html, strip_quick_reply_block
 from services import campaign_context_service, outbound_event_service
 
 MAX_DRAFT_ATTACHMENTS = 5
@@ -37,6 +32,11 @@ def _now_iso() -> str:
 def _future_iso(seconds: int) -> str:
     future = datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=seconds)
     return future.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _past_iso(seconds: int) -> str:
+    past = datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=seconds)
+    return past.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _parse_schedule_at(value: str | None) -> datetime.datetime | None:
@@ -77,6 +77,10 @@ def _is_safety_system_unavailable(error: str | None) -> bool:
 
 def _is_safety_content_block(error: str | None) -> bool:
     return (error or "").startswith("Safety check failed:") and not _is_safety_system_unavailable(error)
+
+
+def _is_scheduled_send_status(status: str | None) -> bool:
+    return (status or "").upper() in {"SCHEDULED", "SENDING"}
 
 
 def _log_draft_event(
@@ -399,7 +403,7 @@ async def send_approved_draft(
         "FROM email_messages e "
         "JOIN leads l ON e.lead_id = l.id "
         "WHERE e.id = ? AND e.direction = 'outbound' "
-        "AND (UPPER(e.status) IN ('DRAFT','SCHEDULED') OR e.status IS NULL) "
+        "AND (UPPER(e.status) IN ('DRAFT','SCHEDULED','SENDING') OR e.status IS NULL) "
         "AND e.approved IN (0, 1) "
         + ("AND e.organization_id = ?" if organization_id is not None else ""),
         (draft_id, organization_id) if organization_id is not None else (draft_id,),
@@ -410,6 +414,16 @@ async def send_approved_draft(
 
     draft = dict(draft)
     draft["body"] = clean_quick_reply_text(draft["body"] or "")
+    try:
+        from services import tenant_service
+
+        sender_identity = tenant_service.resolve_sender_identity(draft.get("organization_id"))
+    except Exception:
+        sender_identity = {}
+    draft["subject"] = normalize_outreach_subject(
+        draft.get("subject"),
+        company_name=sender_identity.get("sender_company"),
+    )
     approval_id = approval_id or _new_approval_id(draft_id, actor_id)
 
     attachments = get_draft_attachments(conn, draft_id, include_content=True)
@@ -417,22 +431,15 @@ async def send_approved_draft(
     if is_reply_draft:
         body_with_qr = strip_quick_reply_block(draft["body"])
         html_body = plain_text_to_basic_html(body_with_qr)
-    elif has_quick_reply_block(draft["body"]):
-        body_with_qr = draft["body"]
-        html_body = plain_text_to_basic_html(draft["body"])
     else:
         body_with_qr = draft["body"]
-        html_body = plain_text_to_basic_html(draft["body"]) + quick_replies_html_for_outreach(
-            draft["subject"],
-            lead_email=draft["lead_email"],
-            campaign_id=draft["campaign_id"],
-            organization_id=draft["organization_id"],
-        )
+        html_body = plain_text_to_basic_html(draft["body"])
 
     conn.execute(
         "UPDATE email_messages SET send_attempts = send_attempts + 1, last_error = NULL WHERE id = ?",
         (draft_id,),
     )
+    conn.execute("UPDATE email_messages SET subject = ? WHERE id = ?", (draft["subject"], draft_id))
     if hasattr(conn, "commit"):
         conn.commit()
     send_res = await send_plain_email(
@@ -458,7 +465,7 @@ async def send_approved_draft(
         conn.execute(
             "UPDATE email_messages SET approved = 1, status = 'SENT', approved_by = COALESCE(approved_by, ?), "
             "approved_at = COALESCE(approved_at, ?), sent_at = ?, scheduled_send_at = NULL, "
-            "external_message_id = ?, external_thread_id = ? WHERE id = ?",
+            "scheduled_claimed_at = NULL, external_message_id = ?, external_thread_id = ? WHERE id = ?",
             (actor_id, now, now, send_res.message_id, send_res.thread_id, draft_id),
         )
         campaign_context_service.record_outbound(
@@ -509,15 +516,16 @@ async def send_approved_draft(
 
     send_attempts_row = conn.execute("SELECT send_attempts FROM email_messages WHERE id = ?", (draft_id,)).fetchone()
     send_attempts = int(send_attempts_row["send_attempts"] or 0) if send_attempts_row else 0
-    is_scheduled = (draft.get("status") or "").upper() == "SCHEDULED"
+    is_scheduled = _is_scheduled_send_status(draft.get("status"))
     if is_scheduled and _is_safety_content_block(send_res.error):
         conn.execute(
-            "UPDATE email_messages SET last_error = ?, status = 'FAILED' WHERE id = ?",
+            "UPDATE email_messages SET last_error = ?, status = 'FAILED', scheduled_claimed_at = NULL WHERE id = ?",
             (send_res.error, draft_id),
         )
     elif is_scheduled and send_attempts >= settings.scheduled_sender_max_attempts:
         conn.execute(
-            "UPDATE email_messages SET last_error = ?, status = 'DRAFT', approved = 0, approved_by = NULL, approved_at = NULL, scheduled_send_at = NULL WHERE id = ?",
+            "UPDATE email_messages SET last_error = ?, status = 'DRAFT', approved = 0, approved_by = NULL, "
+            "approved_at = NULL, scheduled_send_at = NULL, scheduled_claimed_at = NULL WHERE id = ?",
             (
                 f"Automatic send paused after {send_attempts} attempt(s): {send_res.error}. Review provider configuration, then approve again.",
                 draft_id,
@@ -525,7 +533,7 @@ async def send_approved_draft(
         )
     elif is_scheduled:
         conn.execute(
-            "UPDATE email_messages SET last_error = ?, scheduled_send_at = ? WHERE id = ?",
+            "UPDATE email_messages SET last_error = ?, status = 'SCHEDULED', scheduled_send_at = ?, scheduled_claimed_at = NULL WHERE id = ?",
             (send_res.error, _future_iso(settings.scheduled_sender_retry_delay_seconds), draft_id),
         )
     else:
@@ -557,6 +565,7 @@ async def send_due_scheduled_drafts(
     with get_conn() as conn:
         org_sql = "AND organization_id = ? " if organization_id is not None else ""
         max_attempts = settings.scheduled_sender_max_attempts
+        stale_cutoff = _past_iso(settings.scheduled_sender_claim_timeout_seconds)
         pause_params: tuple[Any, ...] = (
             (
                 f"Automatic send paused after {max_attempts} attempt(s). Review provider configuration, then approve again.",
@@ -571,29 +580,46 @@ async def send_due_scheduled_drafts(
         )
         conn.execute(
             "UPDATE email_messages SET status = 'DRAFT', approved = 0, approved_by = NULL, approved_at = NULL, "
-            "scheduled_send_at = NULL, last_error = COALESCE(last_error, ?) "
-            "WHERE direction = 'outbound' AND UPPER(status) = 'SCHEDULED' AND approved = 1 "
+            "scheduled_send_at = NULL, scheduled_claimed_at = NULL, last_error = COALESCE(last_error, ?) "
+            "WHERE direction = 'outbound' AND UPPER(status) IN ('SCHEDULED','SENDING') AND approved = 1 "
             "AND send_attempts >= ? "
             f"{org_sql}",
             pause_params,
         )
-        params: tuple[Any, ...] = (
-            (now, max_attempts, organization_id, max(1, min(limit, 200)))
-            if organization_id is not None
-            else (now, max_attempts, max(1, min(limit, 200)))
+        conn.execute(
+            "UPDATE email_messages SET status = 'SCHEDULED', scheduled_claimed_at = NULL, "
+            "last_error = COALESCE(last_error, ?) "
+            "WHERE direction = 'outbound' AND UPPER(status) = 'SENDING' AND approved = 1 "
+            "AND send_attempts < ? AND scheduled_claimed_at IS NOT NULL AND scheduled_claimed_at <= ? "
+            f"{org_sql}",
+            (
+                (
+                    f"Automatic send claim expired after {settings.scheduled_sender_claim_timeout_seconds} seconds; retrying.",
+                    max_attempts,
+                    stale_cutoff,
+                    organization_id,
+                )
+                if organization_id is not None
+                else (
+                    f"Automatic send claim expired after {settings.scheduled_sender_claim_timeout_seconds} seconds; retrying.",
+                    max_attempts,
+                    stale_cutoff,
+                )
+            ),
         )
-        rows = conn.execute(
-            "SELECT id FROM email_messages "
-            "WHERE direction = 'outbound' AND UPPER(status) = 'SCHEDULED' AND approved = 1 "
-            "AND scheduled_send_at IS NOT NULL AND scheduled_send_at <= ? "
-            "AND send_attempts < ? "
-            f"{org_sql}"
-            "ORDER BY scheduled_send_at ASC LIMIT ?",
-            params,
-        ).fetchall()
-        for row in rows:
-            draft_id = row["id"]
+        claimed_ids = _claim_due_scheduled_drafts(
+            conn,
+            now=now,
+            limit=max(1, min(limit, 200)),
+            max_attempts=max_attempts,
+            organization_id=organization_id,
+        )
+        if hasattr(conn, "commit"):
+            conn.commit()
+        for draft_id in claimed_ids:
             results.append(await send_approved_draft(conn, draft_id, actor_id, organization_id=organization_id))
+            if hasattr(conn, "commit"):
+                conn.commit()
 
     return {
         "status": "success",
@@ -602,6 +628,61 @@ async def send_due_scheduled_drafts(
         "failed": sum(1 for item in results if item.get("status") == "send_failed"),
         "results": results,
     }
+
+
+def _claim_due_scheduled_drafts(
+    conn,
+    *,
+    now: str,
+    limit: int,
+    max_attempts: int,
+    organization_id: int | None,
+) -> list[int]:
+    if conn.__class__.__name__ == "PostgresConnection":
+        params: tuple[Any, ...] = (
+            (now, max_attempts, organization_id, limit, now)
+            if organization_id is not None
+            else (now, max_attempts, limit, now)
+        )
+        org_sql = "AND organization_id = ? " if organization_id is not None else ""
+        rows = conn.execute(
+            "WITH due AS ("
+            "SELECT id FROM email_messages "
+            "WHERE direction = 'outbound' AND UPPER(status) = 'SCHEDULED' AND approved = 1 "
+            "AND scheduled_send_at IS NOT NULL AND scheduled_send_at <= ? "
+            "AND send_attempts < ? "
+            f"{org_sql}"
+            "ORDER BY scheduled_send_at ASC LIMIT ? FOR UPDATE SKIP LOCKED"
+            ") "
+            "UPDATE email_messages e SET status = 'SENDING', scheduled_claimed_at = ?, last_error = NULL "
+            "FROM due WHERE e.id = due.id RETURNING e.id",
+            params,
+        ).fetchall()
+        return [int(row["id"]) for row in rows]
+
+    params = (
+        (now, max_attempts, organization_id, limit)
+        if organization_id is not None
+        else (now, max_attempts, limit)
+    )
+    org_sql = "AND organization_id = ? " if organization_id is not None else ""
+    rows = conn.execute(
+        "SELECT id FROM email_messages "
+        "WHERE direction = 'outbound' AND UPPER(status) = 'SCHEDULED' AND approved = 1 "
+        "AND scheduled_send_at IS NOT NULL AND scheduled_send_at <= ? "
+        "AND send_attempts < ? "
+        f"{org_sql}"
+        "ORDER BY scheduled_send_at ASC LIMIT ?",
+        params,
+    ).fetchall()
+    ids = [int(row["id"]) for row in rows]
+    for draft_id in ids:
+        conn.execute(
+            "UPDATE email_messages SET status = 'SENDING', scheduled_claimed_at = ?, last_error = NULL "
+            "WHERE id = ? AND UPPER(status) = 'SCHEDULED' AND approved = 1",
+            (now, draft_id),
+        )
+    return ids
 
 
 def update_scheduled_draft(

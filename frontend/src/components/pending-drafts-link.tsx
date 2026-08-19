@@ -7,7 +7,11 @@ import { useTenantScope } from '@/components/tenant-scope'
 import { fetchWithAuthRetry } from '@/lib/auth-fetch'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-const DRAFT_COUNT_CACHE_TTL_MS = 15_000
+const DRAFT_COUNT_CACHE_TTL_MS = 60_000
+const DRAFT_COUNT_POLL_INTERVAL_MS = Math.max(
+  0,
+  Number(process.env.NEXT_PUBLIC_DRAFT_COUNT_POLL_INTERVAL_SECONDS || 300) * 1000,
+)
 
 const draftCountCache = new Map<number, { count: number; expiresAt: number }>()
 const draftCountInflight = new Map<number, Promise<number>>()
@@ -60,9 +64,11 @@ export function PendingDraftsLink({ active = false, className }: PendingDraftsLi
     const initial = window.setTimeout(() => {
       void loadCount()
     }, 0)
-    const interval = window.setInterval(() => {
-      void loadCount()
-    }, 30000)
+    const interval = DRAFT_COUNT_POLL_INTERVAL_MS > 0
+      ? window.setInterval(() => {
+          void loadCount()
+        }, DRAFT_COUNT_POLL_INTERVAL_MS)
+      : null
     const handleFocus = () => {
       void loadCount()
     }
@@ -70,7 +76,7 @@ export function PendingDraftsLink({ active = false, className }: PendingDraftsLi
     window.addEventListener('sdr:organization-changed', handleFocus)
     return () => {
       window.clearTimeout(initial)
-      window.clearInterval(interval)
+      if (interval !== null) window.clearInterval(interval)
       window.removeEventListener('focus', handleFocus)
       window.removeEventListener('sdr:organization-changed', handleFocus)
     }

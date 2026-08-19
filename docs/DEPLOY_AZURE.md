@@ -60,7 +60,7 @@ MAILBOX_SYNC_DEFAULT_LIMIT=10
 MAILBOX_SYNC_ENABLED=false
 MAILBOX_SYNC_MARK_SEEN=true
 MAILBOX_SYNC_WAIT=false
-MAILBOX_SYNC_INTERVAL_SECONDS=300
+MAILBOX_SYNC_INTERVAL_SECONDS=1800
 MAILBOX_CONNECTION_TIMEOUT_SECONDS=15
 ```
 
@@ -139,15 +139,17 @@ The Container App should:
 - use `/health` for health checks
 - set minimum replicas to `1` initially
 - use Container Apps secrets or Key Vault references for sensitive values
-- set `SCHEDULED_SENDER_ENABLED=false` if more than one replica may run
+- set `POSTGRES_POOL_MIN_SIZE=0` on Neon/free-tier deployments so idle app processes do not hold database connections open
+- keep `SCHEDULED_SENDER_ENABLED=false` for hybrid production and use one external Azure timer/job or the manual UI button to process due sends
 
 After deploy, verify:
 
 ```bash
 curl https://YOUR_BACKEND_DOMAIN/health
-curl https://YOUR_BACKEND_DOMAIN/health/db
 curl https://YOUR_BACKEND_DOMAIN/health/ai
 ```
+
+Use `/health/db` only for an intentional database check. Do not configure it as the platform liveness/readiness probe on Neon free-tier deployments because it wakes the database.
 
 ## Frontend Static Web App
 
@@ -156,6 +158,7 @@ The frontend is a static export. Production build variables:
 ```env
 NEXT_PUBLIC_API_URL=https://YOUR_BACKEND_DOMAIN
 NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_live_...
+NEXT_PUBLIC_DRAFT_COUNT_POLL_INTERVAL_SECONDS=300
 ```
 
 These are browser-visible build-time values. Changing them requires a frontend rebuild/redeploy.
@@ -205,14 +208,14 @@ Recommended GitHub controls:
 
 ## Scheduler
 
-The app has an in-process scheduled sender for local development and simple single-replica deployments.
+The app has an in-process scheduled sender. Due scheduled emails are first claimed in the database as `SENDING`, so multiple backend replicas should not send the same scheduled row at the same time. Claims that stay in `SENDING` longer than `SCHEDULED_SENDER_CLAIM_TIMEOUT_SECONDS` are released for retry.
 
-For production, prefer:
+For production, you may either:
 
-- `SCHEDULED_SENDER_ENABLED=false`
-- Azure Container Apps Job or Azure Function timer calling due-work endpoints with `X-Cron-Secret`
+- leave `SCHEDULED_SENDER_ENABLED=true` on backend replicas and rely on DB-backed claims, or
+- set `SCHEDULED_SENDER_ENABLED=false` and run one Azure Container Apps Job or Azure Function timer that calls due-work endpoints with `X-Cron-Secret`.
 
-This prevents duplicate sends when multiple backend replicas are running. The GitHub deployment workflow deploys the backend and frontend; it does not create or own the Azure timer/job. Create the timer/job in Azure and point it at the deployed backend.
+The recommended hybrid setup for Neon/free-tier production is `SCHEDULED_SENDER_ENABLED=false`, one low-frequency external timer, and the manual "Run Scheduled Sends" UI button for immediate testing. The external timer remains useful when you want one observable scheduler owner, but it is no longer required solely to avoid duplicate sends. The GitHub deployment workflow deploys the backend and frontend; it does not create or own the Azure timer/job. Create the timer/job in Azure if you choose the external scheduler model.
 
 Scheduled outbound email sender:
 
@@ -232,7 +235,7 @@ curl -X POST "https://YOUR_BACKEND_DOMAIN/api/mailboxes/sync-due" \
   -d '{"wait":false,"mark_seen":true,"limit":10}'
 ```
 
-Recommended mailbox scheduler cadence is every 5 minutes. Configure the same cadence in Azure and in `MAILBOX_SYNC_INTERVAL_SECONDS=300` so the runtime settings document what the scheduler is expected to do. In production, keep `MAILBOX_SYNC_MARK_SEEN=true` so already processed IMAP messages do not remain unread forever. The app also stores inbound `external_message_id` values and skips duplicates before LLM processing as a second protection against repeated drafts.
+Recommended low-compute cadence is every 15-30 minutes for scheduled sends and every 30-60 minutes for mailbox sync. Configure the same expected mailbox cadence in Azure and in `MAILBOX_SYNC_INTERVAL_SECONDS=1800` so the runtime settings document what the scheduler is expected to do. In production, keep `MAILBOX_SYNC_MARK_SEEN=true` so already processed IMAP messages do not remain unread forever. The app also stores inbound `external_message_id` values and skips duplicates before LLM processing as a second protection against repeated drafts.
 
 For local development or a simple single-replica demo, you can set `MAILBOX_SYNC_ENABLED=true` to run an in-process mailbox poller while `uvicorn` is running. Keep it `false` in Azure multi-replica production so only the external scheduler polls mailboxes.
 

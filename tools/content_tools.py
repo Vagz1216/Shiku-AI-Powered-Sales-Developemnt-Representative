@@ -13,7 +13,7 @@ PROFESSIONAL_INSTRUCTIONS = """Write a formal, business-focused outreach email. 
 - Specific business benefits and ROI focus
 - Formal greeting (Dear CEO, Manager, etc.) and professional closing (Best regards, Business Development Team)
 - No placeholder text - use real business development language
-- Focus on partnership opportunities and business value
+- Focus on a specific, low-friction business request and clear value
 
 Structure: Professional greeting + value proposition + specific benefits + clear CTA + professional signature"""
 
@@ -84,7 +84,7 @@ Do not use any placeholder text like [Your Name] or [Company]. Write complete, r
     except Exception as e:
         logger.error(f"Professional email generation failed: {e}")
         return OutreachEmailDraft(
-            subject=f"Partnership Opportunity - {value_proposition}",
+            subject="Rates and media request",
             body=f"Dear {name} Team,\n\nWe help companies with {value_proposition.lower()}. Our solution delivers measurable ROI and operational efficiency.\n\nWould you be interested in a brief discussion about how we can help {name} achieve similar results?\n\nBest regards,\nBusiness Development Team"
         )
 
@@ -121,7 +121,7 @@ Do not use any placeholder text like [Your Name] or [Company]. Write complete, r
     except Exception as e:
         logger.error(f"Engaging email generation failed: {e}")
         return OutreachEmailDraft(
-            subject=f"How {name} Can Transform Operations 🚀",
+            subject="Rates and media request",
             body=f"Hi there!\n\nI recently worked with a company similar to {name} that was struggling with {value_proposition.lower()}. Within 3 months, they saw incredible results.\n\nI'd love to share their story and see if we can help {name} achieve similar success!\n\nBest,\nSarah from Growth Team"
         )
 
@@ -158,7 +158,7 @@ Do not use any placeholder text like [Your Name] or [Company]. Write complete, r
     except Exception as e:
         logger.error(f"Concise email generation failed: {e}")
         return OutreachEmailDraft(
-            subject=f"{value_proposition} - Quick Question",
+            subject="Rates and media request",
             body=f"Hi,\n\nCan we help {name} with {value_proposition.lower()}?\n\n5-minute call this week?\n\nBest,\nMike"
         )
 

@@ -634,6 +634,40 @@ def test_sender_identity_uses_actor_first_name_when_mailbox_sender_is_blank(tena
     assert identity["sender_company"] == "StayEZ"
 
 
+def test_sender_identity_uses_mailbox_display_when_org_name_is_generic(tenant_db):
+    org = tenant_service.create_organization(
+        "Default Organization",
+        "default-organization",
+        "admin@stayez.test",
+        _claims(),
+    )
+    admin_claims = _claims(email="admin@stayez.test", sub="invited:admin@stayez.test", name="Alex Lane")
+    mailbox = tenant_service.create_mailbox(
+        org["id"],
+        {
+            "provider": "smtp_imap",
+            "display_name": "StayEZ Homes",
+            "email_address": "info@stayez.test",
+            "smtp_host": "mail.stayez.test",
+            "smtp_port": 465,
+            "smtp_username": "info@stayez.test",
+            "smtp_password": "secret",
+            "imap_host": "mail.stayez.test",
+            "imap_port": 993,
+            "imap_username": "info@stayez.test",
+            "imap_password": "secret",
+        },
+        admin_claims,
+    )
+    with _connect(tenant_db) as conn:
+        conn.execute("UPDATE mailbox_connections SET status = 'CONNECTED' WHERE id = ?", (mailbox["id"],))
+
+    identity = tenant_service.resolve_sender_identity(org["id"], admin_claims)
+
+    assert identity["sender_name"] == "Alex"
+    assert identity["sender_company"] == "StayEZ Homes"
+
+
 def test_org_admin_can_disconnect_and_reconnect_mailbox(tenant_db):
     org = tenant_service.create_organization(
         "Market Hacks",

@@ -77,7 +77,7 @@ class AppConfig(BaseSettings):
         description="Aurora database name",
     )
     postgres_pool_min_size: int = Field(
-        default=1,
+        default=0,
         validation_alias="POSTGRES_POOL_MIN_SIZE",
         description="Minimum PostgreSQL pooled connections for standard Postgres deployments",
         ge=0,
@@ -457,6 +457,13 @@ class AppConfig(BaseSettings):
         validation_alias="NEXT_PUBLIC_API_URL",
         description="Frontend API URL carried in root .env for local/static builds",
     )
+    next_public_draft_count_poll_interval_seconds: int = Field(
+        default=300,
+        validation_alias="NEXT_PUBLIC_DRAFT_COUNT_POLL_INTERVAL_SECONDS",
+        description="Frontend draft count polling interval carried in root .env for local/static builds",
+        ge=0,
+        le=86400,
+    )
     vercel_oidc_token: str | None = Field(
         default=None,
         validation_alias="VERCEL_OIDC_TOKEN",
@@ -642,13 +649,18 @@ class AppConfig(BaseSettings):
         validation_alias="CRON_SECRET",
         description="Shared secret for trusted schedulers that call due-work endpoints",
     )
+    smtp_helo_hostname: str | None = Field(
+        default=None,
+        validation_alias="SMTP_HELO_HOSTNAME",
+        description="Hostname used for SMTP EHLO/HELO. Defaults to the mailbox SMTP host.",
+    )
     scheduled_sender_enabled: bool = Field(
-        default=True,
+        default=False,
         validation_alias="SCHEDULED_SENDER_ENABLED",
         description="Run the in-process background sender for due scheduled emails",
     )
     scheduled_sender_interval_seconds: int = Field(
-        default=30,
+        default=900,
         validation_alias="SCHEDULED_SENDER_INTERVAL_SECONDS",
         description="How often the in-process scheduled email sender checks for due emails",
         gt=0,
@@ -682,6 +694,13 @@ class AppConfig(BaseSettings):
         gt=0,
         le=20,
     )
+    scheduled_sender_claim_timeout_seconds: int = Field(
+        default=900,
+        validation_alias="SCHEDULED_SENDER_CLAIM_TIMEOUT_SECONDS",
+        description="How long a scheduled email may remain claimed as SENDING before another worker can retry it",
+        gt=0,
+        le=86400,
+    )
     mailbox_sync_default_limit: int = Field(
         default=10,
         validation_alias="MAILBOX_SYNC_DEFAULT_LIMIT",
@@ -705,7 +724,7 @@ class AppConfig(BaseSettings):
         description="Whether /api/mailboxes/sync-due waits for processing before returning by default",
     )
     mailbox_sync_interval_seconds: int = Field(
-        default=300,
+        default=1800,
         validation_alias="MAILBOX_SYNC_INTERVAL_SECONDS",
         description="Recommended external scheduler frequency for mailbox sync jobs",
         gt=0,

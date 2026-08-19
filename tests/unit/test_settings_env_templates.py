@@ -19,8 +19,12 @@ def test_azure_env_template_loads(monkeypatch):
     settings = AppConfig(_env_file=".env.azure.example")
 
     assert settings.database_url.startswith("postgresql://")
+    assert settings.postgres_pool_min_size == 0
+    assert settings.postgres_pool_max_size == 2
     assert settings.scheduled_sender_enabled is False
+    assert settings.scheduled_sender_interval_seconds == 900
     assert settings.mailbox_sync_enabled is False
+    assert settings.mailbox_sync_interval_seconds == 1800
     assert settings.default_mailbox_id is None
     assert settings.next_public_api_url
     assert settings.azure_container_registry_login_server
@@ -32,3 +36,4 @@ def test_local_env_template_allows_blank_optional_mailbox_id(monkeypatch):
 
     assert settings.default_mailbox_id is None
     assert settings.mailbox_sync_enabled is False
+    assert settings.scheduled_sender_enabled is False

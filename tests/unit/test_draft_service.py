@@ -32,6 +32,7 @@ def _conn():
             approved_by TEXT,
             approved_at TEXT,
             scheduled_send_at TEXT,
+            scheduled_claimed_at TEXT,
             sent_at TEXT,
             send_attempts INTEGER NOT NULL DEFAULT 0,
             last_error TEXT,
@@ -341,12 +342,76 @@ def test_send_due_scheduled_drafts_sends_due_email(monkeypatch):
     monkeypatch.setattr(draft_service, "send_plain_email", fake_send_plain_email)
 
     result = asyncio.run(draft_service.send_due_scheduled_drafts())
-    row = conn.execute("SELECT status, sent_at, external_message_id FROM email_messages WHERE id = 10").fetchone()
+    row = conn.execute(
+        "SELECT status, sent_at, external_message_id, scheduled_claimed_at FROM email_messages WHERE id = 10"
+    ).fetchone()
 
     assert result["sent"] == 1
     assert len(calls) == 1
     assert row["status"] == "SENT"
     assert row["sent_at"]
+    assert row["external_message_id"] == "msg_123"
+    assert row["scheduled_claimed_at"] is None
+
+
+def test_claim_due_scheduled_drafts_marks_rows_sending():
+    conn = _conn()
+    conn.execute(
+        "UPDATE email_messages SET approved = 1, status = 'SCHEDULED', scheduled_send_at = '2000-01-01T00:00:00Z' WHERE id = 10"
+    )
+
+    claimed = draft_service._claim_due_scheduled_drafts(
+        conn,
+        now="2026-08-18T10:00:00Z",
+        limit=50,
+        max_attempts=3,
+        organization_id=None,
+    )
+    claimed_again = draft_service._claim_due_scheduled_drafts(
+        conn,
+        now="2026-08-18T10:00:01Z",
+        limit=50,
+        max_attempts=3,
+        organization_id=None,
+    )
+    row = conn.execute("SELECT status, scheduled_claimed_at FROM email_messages WHERE id = 10").fetchone()
+
+    assert claimed == [10]
+    assert claimed_again == []
+    assert row["status"] == "SENDING"
+    assert row["scheduled_claimed_at"] == "2026-08-18T10:00:00Z"
+
+
+def test_send_due_scheduled_drafts_releases_stale_sending_claim(monkeypatch):
+    conn = _conn()
+    conn.execute(
+        "UPDATE email_messages SET approved = 1, status = 'SENDING', "
+        "scheduled_send_at = '2000-01-01T00:00:00Z', scheduled_claimed_at = '2000-01-01T00:00:00Z' WHERE id = 10"
+    )
+    calls = []
+
+    class DummyConn:
+        def __enter__(self):
+            return conn
+
+        def __exit__(self, *args):
+            return False
+
+    async def fake_send_plain_email(**kwargs):
+        calls.append(kwargs)
+        return SendEmailResult(ok=True, message_id="msg_123", thread_id="thread_123")
+
+    monkeypatch.setattr(draft_service.settings, "scheduled_sender_claim_timeout_seconds", 900)
+    monkeypatch.setattr(draft_service, "get_conn", lambda: DummyConn())
+    monkeypatch.setattr(draft_service, "send_plain_email", fake_send_plain_email)
+
+    result = asyncio.run(draft_service.send_due_scheduled_drafts())
+    row = conn.execute("SELECT status, scheduled_claimed_at, external_message_id FROM email_messages WHERE id = 10").fetchone()
+
+    assert result["sent"] == 1
+    assert len(calls) == 1
+    assert row["status"] == "SENT"
+    assert row["scheduled_claimed_at"] is None
     assert row["external_message_id"] == "msg_123"
 
 
@@ -373,13 +438,14 @@ def test_scheduled_safety_outage_returns_to_review_after_retry_cap(monkeypatch):
 
     result = asyncio.run(draft_service.send_due_scheduled_drafts())
     row = conn.execute(
-        "SELECT status, approved, scheduled_send_at, send_attempts, last_error FROM email_messages WHERE id = 10"
+        "SELECT status, approved, scheduled_send_at, scheduled_claimed_at, send_attempts, last_error FROM email_messages WHERE id = 10"
     ).fetchone()
 
     assert result["failed"] == 1
     assert row["status"] == "DRAFT"
     assert row["approved"] == 0
     assert row["scheduled_send_at"] is None
+    assert row["scheduled_claimed_at"] is None
     assert row["send_attempts"] == 3
     assert "Review provider configuration" in row["last_error"]
 
@@ -406,12 +472,13 @@ def test_scheduled_unsafe_content_marks_failed(monkeypatch):
 
     result = asyncio.run(draft_service.send_due_scheduled_drafts())
     row = conn.execute(
-        "SELECT status, approved, scheduled_send_at, send_attempts, last_error FROM email_messages WHERE id = 10"
+        "SELECT status, approved, scheduled_send_at, scheduled_claimed_at, send_attempts, last_error FROM email_messages WHERE id = 10"
     ).fetchone()
 
     assert result["failed"] == 1
     assert row["status"] == "FAILED"
     assert row["approved"] == 1
     assert row["scheduled_send_at"] == "2000-01-01T00:00:00Z"
+    assert row["scheduled_claimed_at"] is None
     assert row["send_attempts"] == 1
     assert row["last_error"] == "Safety check failed: Prompt injection detected."

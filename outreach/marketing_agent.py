@@ -18,11 +18,8 @@ from tools.send_email import send_plain_email
 from outreach.workers import run_drafter_agent, run_reviewer_agent
 from services import campaign_context_service, lead_service, metering_service, platform_settings_service, tenant_service
 from utils.db_connection import dict_from_row, get_conn
-from utils.quick_replies import (
-    quick_replies_for_outreach,
-    quick_replies_html_for_outreach,
-    plain_text_to_basic_html,
-)
+from utils.email_deliverability import normalize_outreach_subject
+from utils.quick_replies import plain_text_to_basic_html
 from utils.langfuse_metadata import trace_metadata as _trace_metadata, update_current_span_metadata
 
 # Setup logging
@@ -544,10 +541,15 @@ class OutreachOrchestrator:
                 skipped_count = 0
                 processed = 0
                 claimed_count = 0
+                last_candidate_index = 0
+                batch_limit_reached = False
                 run_records: list[Dict[str, Any]] = []
 
                 for index, lead_data in enumerate(leads, start=1):
+                    last_candidate_index = index
                     if claimed_count >= batch_size:
+                        batch_limit_reached = True
+                        last_candidate_index = index - 1
                         break
                     lead_info = {
                         "name": lead_data.get("name", "Valued Contact"),
@@ -700,14 +702,13 @@ class OutreachOrchestrator:
                                 else:
                                     drafts = await run_drafter_agent(camp_info, lead_info)
                                     review_result = await run_reviewer_agent(camp_info, lead_info, drafts)
+                                    review_result.subject = normalize_outreach_subject(
+                                        review_result.subject,
+                                        company_name=camp_info.get("sender_company"),
+                                    )
 
                             if campaign.auto_approve_drafts and target_channel == "email":
-                                html_body = plain_text_to_basic_html(review_result.body) + quick_replies_html_for_outreach(
-                                    review_result.subject,
-                                    lead_email=lead_info["email"],
-                                    campaign_id=campaign.id,
-                                    organization_id=campaign_org_id,
-                                )
+                                html_body = plain_text_to_basic_html(review_result.body)
                                 send_res = await send_plain_email(
                                     email=lead_info["email"],
                                     name=lead_info["name"],
@@ -922,6 +923,17 @@ class OutreachOrchestrator:
                         if callback:
                             await callback("error", f"Lead processing failed for {lead_info['email']}: {lead_error}")
 
+                unprocessed_candidates = max(0, len(leads) - last_candidate_index)
+                if batch_limit_reached:
+                    cap_msg = (
+                        f"This run reached the per-run cap of {batch_size} eligible lead touch(es). "
+                        f"{unprocessed_candidates} fetched candidate(s) were not checked in this run. "
+                        "Review or send the drafts from this batch, then run outreach again to continue with the next eligible leads."
+                    )
+                    logger.info(cap_msg)
+                    if callback:
+                        await callback("warning", cap_msg)
+
                 final_msg = (
                     f"Campaign finished: processed={processed}, sent={sent_count}, "
                     f"drafted={draft_count}, skipped={skipped_count}, failed={failed_count}"
@@ -937,6 +949,10 @@ class OutreachOrchestrator:
                     "drafted": draft_count,
                     "skipped": skipped_count,
                     "failed": failed_count,
+                    "batch_limit_reached": batch_limit_reached,
+                    "batch_size": batch_size,
+                    "candidate_count": len(leads),
+                    "unprocessed_candidate_count": unprocessed_candidates,
                     "run_records": run_records,
                 }
                     

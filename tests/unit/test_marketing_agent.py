@@ -159,6 +159,100 @@ def test_campaign_skips_lead_when_first_touch_already_exists(monkeypatch):
     assert any("No eligible sequence step found" in message for _, message in callback_events)
 
 
+def test_campaign_warns_when_run_reaches_per_run_cap(monkeypatch):
+    campaign = SimpleNamespace(
+        id=42,
+        name="Capped Campaign",
+        value_proposition="Value",
+        cta="Book a call",
+        max_leads_per_campaign=1,
+        lead_selection_order="newest_first",
+        auto_approve_drafts=False,
+    )
+    leads = [
+        {
+            "id": 7,
+            "name": "Gabrielle",
+            "email": "gabrielle@example.com",
+            "company": "Acme",
+            "industry": "Software",
+            "pain_points": "Manual work",
+            "touch_count": 0,
+            "emails_sent": 0,
+            "responded": 0,
+            "status": "NEW",
+        },
+        {
+            "id": 8,
+            "name": "Mina",
+            "email": "mina@example.com",
+            "company": "Example",
+            "industry": "Software",
+            "pain_points": "Manual work",
+            "touch_count": 0,
+            "emails_sent": 0,
+            "responded": 0,
+            "status": "NEW",
+        },
+    ]
+    callback_events = []
+
+    async def fake_drafter(camp_info, lead_info):
+        return SimpleNamespace()
+
+    async def fake_reviewer(camp_info, lead_info, drafts):
+        return SimpleNamespace(
+            subject="Hello",
+            body="Draft body",
+            selected_draft_type="professional",
+            channel="email",
+            deep_link_url="",
+        )
+
+    async def fake_callback(status, message):
+        callback_events.append((status, message))
+
+    class DummyConn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, *args, **kwargs):
+            return None
+
+    monkeypatch.setattr(marketing_agent, "trace", lambda **kwargs: nullcontext())
+    monkeypatch.setattr(marketing_agent, "gen_trace_id", lambda: "trace_1")
+    monkeypatch.setattr(marketing_agent, "fetch_campaign_info", lambda campaign_name=None, organization_id=None: campaign)
+    monkeypatch.setattr(marketing_agent.lead_service, "get_leads", lambda **kwargs: {"success": True, "data": leads})
+    monkeypatch.setattr(marketing_agent.lead_service, "update_lead_touch", lambda *args, **kwargs: None)
+    monkeypatch.setattr(marketing_agent, "run_drafter_agent", fake_drafter)
+    monkeypatch.setattr(marketing_agent, "run_reviewer_agent", fake_reviewer)
+    monkeypatch.setattr(
+        marketing_agent,
+        "_claim_next_outreach_touch",
+        lambda **kwargs: {"claimed": True, "message_id": 99, "step": {"step_number": 1, "channel": "email"}},
+    )
+    monkeypatch.setattr(marketing_agent, "_complete_initial_outreach_touch", lambda *args, **kwargs: None)
+    monkeypatch.setattr(marketing_agent, "_fail_initial_outreach_touch", lambda *args, **kwargs: None)
+    monkeypatch.setattr(marketing_agent, "get_conn", lambda: DummyConn())
+
+    result = asyncio.run(
+        marketing_agent.OutreachOrchestrator().execute_campaign(
+            campaign_name="Capped Campaign",
+            callback=fake_callback,
+        )
+    )
+
+    assert result["drafted"] == 1
+    assert result["batch_limit_reached"] is True
+    assert result["batch_size"] == 1
+    assert result["candidate_count"] == 2
+    assert result["unprocessed_candidate_count"] == 1
+    assert any("run outreach again" in message.lower() for status, message in callback_events if status == "warning")
+
+
 def test_claim_next_outreach_touch_is_campaign_lead_idempotent(tmp_path, monkeypatch):
     db_path = tmp_path / "outreach-claim.sqlite3"
     with _connect(db_path) as conn:

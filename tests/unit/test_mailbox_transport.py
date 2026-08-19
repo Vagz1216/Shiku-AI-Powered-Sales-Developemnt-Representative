@@ -164,6 +164,96 @@ def test_mailbox_daily_limit_uses_portable_date_filter(tmp_path, monkeypatch):
     assert error == "Mailbox daily limit reached (1). Try again tomorrow."
 
 
+def test_smtp_send_sets_date_header_and_local_hostname(monkeypatch):
+    captured = {}
+
+    class FakeSMTP:
+        def __init__(self, host, port, timeout=None, local_hostname=None):
+            captured["host"] = host
+            captured["port"] = port
+            captured["timeout"] = timeout
+            captured["local_hostname"] = local_hostname
+
+        def login(self, username, password):
+            captured["username"] = username
+            captured["password"] = password
+
+        def send_message(self, message):
+            captured["message"] = message
+
+        def quit(self):
+            captured["quit"] = True
+
+    monkeypatch.setattr(mailbox_transport.smtplib, "SMTP_SSL", FakeSMTP)
+    monkeypatch.setattr(mailbox_transport.settings, "smtp_helo_hostname", None)
+
+    message_id = mailbox_transport._send_via_smtp(
+        {
+            "smtp_host": "mail.stayez.co.ke",
+            "smtp_port": 465,
+            "smtp_use_ssl": 1,
+            "smtp_username": "info@stayez.co.ke",
+            "smtp_password_secret": "local:cGFzcw==",
+            "email_address": "info@stayez.co.ke",
+            "display_name": "Stayez Homes",
+        },
+        to_email="lead@example.com",
+        to_name="Lead",
+        subject="Hello",
+        body="Body",
+        html_body=None,
+        attachments=None,
+        headers=None,
+    )
+
+    assert captured["local_hostname"] == "mail.stayez.co.ke"
+    assert captured["username"] == "info@stayez.co.ke"
+    assert captured["password"] == "pass"
+    assert captured["message"]["Date"]
+    assert captured["message"]["Message-ID"] == message_id
+
+
+def test_smtp_send_prefers_configured_helo_hostname(monkeypatch):
+    captured = {}
+
+    class FakeSMTP:
+        def __init__(self, host, port, timeout=None, local_hostname=None):
+            captured["local_hostname"] = local_hostname
+
+        def login(self, username, password):
+            pass
+
+        def send_message(self, message):
+            pass
+
+        def quit(self):
+            pass
+
+    monkeypatch.setattr(mailbox_transport.smtplib, "SMTP_SSL", FakeSMTP)
+    monkeypatch.setattr(mailbox_transport.settings, "smtp_helo_hostname", "mail.example.com")
+
+    mailbox_transport._send_via_smtp(
+        {
+            "smtp_host": "smtp.vendor.test",
+            "smtp_port": 465,
+            "smtp_use_ssl": 1,
+            "smtp_username": "info@example.com",
+            "smtp_password_secret": "local:cGFzcw==",
+            "email_address": "info@example.com",
+            "display_name": "Example",
+        },
+        to_email="lead@example.com",
+        to_name="Lead",
+        subject="Hello",
+        body="Body",
+        html_body=None,
+        attachments=None,
+        headers=None,
+    )
+
+    assert captured["local_hostname"] == "mail.example.com"
+
+
 def test_list_connected_imap_mailboxes_filters_connected_smtp_imap(tmp_path, monkeypatch):
     db_path = tmp_path / "mailboxes.sqlite3"
     with _connect(db_path) as conn:

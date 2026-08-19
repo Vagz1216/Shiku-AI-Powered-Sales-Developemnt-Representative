@@ -83,6 +83,10 @@ async def run_drafter_agent(campaign_info: Dict[str, Any], lead_info: Dict[str, 
     1. Professional: Formal business tone, focusing on ROI and specific business benefits.
     2. Engaging: Warm, story-driven, conversational, focusing on relatable business challenges.
     3. Concise: Brief, direct, maximum 4-5 sentences, focusing on quick wins.
+
+    Subject-line rules:
+    - Use simple, specific subjects such as "Rates and media for StayEZ" or "Rates and media request".
+    - Do NOT use spammy cold-outreach phrases like "partnership opportunity", "partnership opportunities", "following up", "quick question", or "fresh thought".
     
     Follow-up sequencing rules:
     - If Emails Sent In This Campaign is 0: treat as first-touch outreach.
@@ -98,6 +102,7 @@ async def run_drafter_agent(campaign_info: Dict[str, Any], lead_info: Dict[str, 
     CRITICAL INSTRUCTION:
     - Do NOT use any bracketed placeholders like [Your Name], [Company], [Sender], etc.
     - Always sign using the provided sender identity.
+    - Do NOT mention Euclid Tech unless the provided sender company is exactly Euclid Tech.
     - Use the provided CTA naturally in the email body.
     """
     
@@ -168,6 +173,8 @@ async def run_reviewer_agent(campaign_info: Dict[str, Any], lead_info: Dict[str,
     CRITICAL INSTRUCTION:
     - The final selected body MUST NOT contain any placeholders like [Your Name], [Company], etc.
     - If the chosen draft has placeholders, replace them with the provided sender identity before outputting.
+    - The final selected subject MUST NOT contain "partnership opportunity", "partnership opportunities", "following up", "quick question", or "fresh thought".
+    - Do NOT mention Euclid Tech unless the provided sender company is exactly Euclid Tech.
     """
     
     result, provider = await run_agent_with_fallback(

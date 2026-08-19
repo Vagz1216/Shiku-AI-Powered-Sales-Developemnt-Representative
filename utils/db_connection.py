@@ -846,6 +846,7 @@ def _ensure_outreach_operations_tables(conn: sqlite3.Connection):
         _add_column_if_missing(conn, "email_messages", "approved_by", "TEXT")
         _add_column_if_missing(conn, "email_messages", "approved_at", "TEXT")
         _add_column_if_missing(conn, "email_messages", "scheduled_send_at", "TEXT")
+        _add_column_if_missing(conn, "email_messages", "scheduled_claimed_at", "TEXT")
         _add_column_if_missing(conn, "email_messages", "sent_at", "TEXT")
         _add_column_if_missing(conn, "email_messages", "send_attempts", "INTEGER NOT NULL DEFAULT 0")
         _add_column_if_missing(conn, "email_messages", "last_error", "TEXT")

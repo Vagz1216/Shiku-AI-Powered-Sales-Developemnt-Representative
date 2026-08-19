@@ -476,6 +476,29 @@ def _first_name(value: Any) -> str | None:
     return text.split()[0][:120]
 
 
+def _mailbox_company_fallback(mailbox: dict[str, Any] | None) -> str | None:
+    if not mailbox:
+        return None
+    display = _optional_text(mailbox.get("display_name"))
+    if display:
+        return display
+    email = _optional_text(mailbox.get("email_address"))
+    if email and "@" in email:
+        domain = email.split("@", 1)[1].split(".", 1)[0]
+        if domain:
+            return domain.replace("-", " ").title()[:120]
+    return None
+
+
+def _usable_sender_company(value: Any) -> str | None:
+    text = _optional_text(value)
+    if not text:
+        return None
+    if text.lower() in {"default", "default organization", "organization"}:
+        return None
+    return text
+
+
 def _routing_modes_value(value: Any, *, default: str) -> str:
     if isinstance(value, (list, tuple, set)):
         raw = ",".join(str(item) for item in value)
@@ -1607,7 +1630,8 @@ def resolve_sender_identity(
     )
     sender_company = (
         _optional_text((mailbox or {}).get("company_display_name"))
-        or organization_name
+        or _usable_sender_company(organization_name)
+        or _mailbox_company_fallback(mailbox)
         or _optional_text(settings.outreach_sender_company)
     )
     return {

@@ -9,13 +9,13 @@ from typing import Any
 from config import settings
 from services import campaign_context_service, tenant_service
 from utils.db_connection import get_conn, dict_from_row, sql_bool_false, sql_bool_true
-from utils.quick_replies import quick_replies_for_followup
+from utils.email_deliverability import normalize_outreach_subject
 
 DEFAULT_SEQUENCE_STEPS = [
     {
         "step_number": 1,
         "delay_days": 3,
-        "subject_template": "Following up with {company}",
+        "subject_template": "Rates and media for {sender_company}",
         "body_template": (
             "Hi {name},\n\n"
             "{context_hint}I wanted to follow up on my note about {value_proposition}. "
@@ -75,7 +75,10 @@ def _sequence_subject(subject: str, context: dict[str, Any]) -> str:
     text = " ".join((subject or "").strip().split())
     while text.lower().startswith(("re:", "fw:", "fwd:")):
         text = text.split(":", 1)[1].strip()
-    return text or _render("Following up with {company}", context)
+    return normalize_outreach_subject(
+        text or _render("Rates and media for {sender_company}", context),
+        company_name=str(context.get("sender_company") or ""),
+    )
 
 
 def _context_hint(context: dict[str, Any]) -> str:
@@ -268,7 +271,7 @@ def generate_due_followup_drafts(
                     continue
                 duplicate = conn.execute(
                     "SELECT id FROM email_messages WHERE lead_id = ? AND campaign_id = ? AND sequence_step_id = ? "
-                    "AND direction = 'outbound' AND UPPER(COALESCE(status, '')) IN ('DRAFT','SCHEDULED','SENT') LIMIT 1",
+                    "AND direction = 'outbound' AND UPPER(COALESCE(status, '')) IN ('DRAFT','SCHEDULED','SENDING','SENT') LIMIT 1",
                     (item["lead_id"], item["campaign_id"], item["sequence_step_id"]),
                 ).fetchone()
                 if duplicate:
@@ -287,18 +290,11 @@ def generate_due_followup_drafts(
                 context["sender_name"] = sender_identity.get("sender_name") or settings.outreach_sender_name
                 context["sender_company"] = sender_identity.get("sender_company") or settings.outreach_sender_company
                 subject = _sequence_subject(
-                    _render(item.get("subject_template") or "Following up with {company}", context),
+                    _render(item.get("subject_template") or "Rates and media for {sender_company}", context),
                     context,
                 )
                 channel = str(item.get("channel") or "email").lower()
                 body = _render(item.get("body_template") or DEFAULT_SEQUENCE_STEPS[0]["body_template"], context)
-                if channel == "email":
-                    body = body + quick_replies_for_followup(
-                        subject,
-                        lead_email=item["email"],
-                        campaign_id=item["campaign_id"],
-                        organization_id=item["organization_id"],
-                    )
                 cur = conn.execute(
                     "INSERT INTO email_messages "
                     "(organization_id, lead_id, campaign_id, sequence_step_id, direction, subject, body, status, processed, approved, created_at, channel) "
@@ -385,7 +381,7 @@ def list_upcoming_followups(
             item = dict_from_row(row) or {}
             duplicate = conn.execute(
                 "SELECT id, status FROM email_messages WHERE lead_id = ? AND campaign_id = ? AND sequence_step_id = ? "
-                "AND direction = 'outbound' AND UPPER(COALESCE(status, '')) IN ('DRAFT','SCHEDULED','SENT') LIMIT 1",
+                "AND direction = 'outbound' AND UPPER(COALESCE(status, '')) IN ('DRAFT','SCHEDULED','SENDING','SENT') LIMIT 1",
                 (item["lead_id"], item["campaign_id"], item["sequence_step_id"]),
             ).fetchone()
             last_contacted = _parse_dt(item.get("last_contacted_at"))
