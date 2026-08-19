@@ -239,24 +239,6 @@ CREATE TABLE IF NOT EXISTS leads (
     UNIQUE (organization_id, email)
 );
 
-CREATE TABLE IF NOT EXISTS lead_discovery_jobs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    organization_id INTEGER NOT NULL,
-    campaign_id INTEGER NOT NULL,
-    status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','RUNNING','COMPLETED','FAILED')),
-    candidates_found INTEGER NOT NULL DEFAULT 0,
-    leads_qualified INTEGER NOT NULL DEFAULT 0,
-    leads_imported INTEGER NOT NULL DEFAULT 0,
-    search_queries TEXT,
-    config TEXT,
-    error TEXT,
-    started_at TEXT,
-    completed_at TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
-    FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE
-);
-
 -- Campaigns
 CREATE TABLE IF NOT EXISTS campaigns (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -274,6 +256,24 @@ CREATE TABLE IF NOT EXISTS campaigns (
     llm_routing_mode TEXT CHECK(llm_routing_mode IS NULL OR llm_routing_mode IN ('quality_first','balanced','cost_optimized')),
     FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
     UNIQUE (organization_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS lead_discovery_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    organization_id INTEGER NOT NULL,
+    campaign_id INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','RUNNING','COMPLETED','FAILED')),
+    candidates_found INTEGER NOT NULL DEFAULT 0,
+    leads_qualified INTEGER NOT NULL DEFAULT 0,
+    leads_imported INTEGER NOT NULL DEFAULT 0,
+    search_queries TEXT,
+    config TEXT,
+    error TEXT,
+    started_at TEXT,
+    completed_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+    FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE
 );
 
 -- Campaign Sequences (Defines omnichannel follow-up steps)

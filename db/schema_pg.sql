@@ -223,22 +223,6 @@ CREATE TABLE IF NOT EXISTS leads (
     UNIQUE (organization_id, email)
 );
 
-CREATE TABLE IF NOT EXISTS lead_discovery_jobs (
-    id SERIAL PRIMARY KEY,
-    organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-    campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
-    status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','RUNNING','COMPLETED','FAILED')),
-    candidates_found INTEGER NOT NULL DEFAULT 0,
-    leads_qualified INTEGER NOT NULL DEFAULT 0,
-    leads_imported INTEGER NOT NULL DEFAULT 0,
-    search_queries TEXT,
-    config TEXT,
-    error TEXT,
-    started_at TIMESTAMP,
-    completed_at TIMESTAMP,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
-);
-
 CREATE TABLE IF NOT EXISTS campaigns (
     id SERIAL PRIMARY KEY,
     organization_id INTEGER NOT NULL DEFAULT 1 REFERENCES organizations(id) ON DELETE CASCADE,
@@ -254,6 +238,22 @@ CREATE TABLE IF NOT EXISTS campaigns (
     max_emails_per_lead INTEGER NOT NULL DEFAULT 5,
     llm_routing_mode TEXT CHECK(llm_routing_mode IS NULL OR llm_routing_mode IN ('quality_first','balanced','cost_optimized')),
     UNIQUE (organization_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS lead_discovery_jobs (
+    id SERIAL PRIMARY KEY,
+    organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','RUNNING','COMPLETED','FAILED')),
+    candidates_found INTEGER NOT NULL DEFAULT 0,
+    leads_qualified INTEGER NOT NULL DEFAULT 0,
+    leads_imported INTEGER NOT NULL DEFAULT 0,
+    search_queries TEXT,
+    config TEXT,
+    error TEXT,
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS campaign_leads (
