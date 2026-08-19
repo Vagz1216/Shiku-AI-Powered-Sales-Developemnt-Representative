@@ -265,6 +265,16 @@ CREATE TABLE IF NOT EXISTS campaign_leads (
     PRIMARY KEY (campaign_id, lead_id)
 );
 
+CREATE TABLE IF NOT EXISTS campaign_sequences (
+    id SERIAL PRIMARY KEY,
+    campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+    step_number INTEGER NOT NULL,
+    channel TEXT NOT NULL DEFAULT 'email' CHECK(channel IN ('email','linkedin','whatsapp')),
+    delay_days INTEGER NOT NULL DEFAULT 3,
+    prompt_context TEXT,
+    UNIQUE (campaign_id, step_number)
+);
+
 CREATE TABLE IF NOT EXISTS campaign_lead_contexts (
     organization_id INTEGER NOT NULL DEFAULT 1 REFERENCES organizations(id) ON DELETE CASCADE,
     campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
