@@ -379,6 +379,10 @@ class EmailMonitorSystem:
         if lead_ctx and lead_ctx.get("campaign_id"):
             metadata["campaign_id"] = lead_ctx["campaign_id"]
             metadata["auto_approve_monitor_replies"] = lead_ctx.get("auto_approve_monitor_replies", False)
+        sender_identity = tenant_service.resolve_sender_identity(metadata.get("organization_id"))
+        metadata["outbound_sender_name"] = sender_identity.get("sender_name")
+        metadata["outbound_sender_company"] = sender_identity.get("sender_company")
+        metadata["mailbox_signature_enabled"] = bool(sender_identity.get("mailbox_signature_enabled"))
         if lead_ctx and callback:
             parts = [f"Lead: {lead_ctx['name'] or 'Unknown'} ({metadata['sender_email']})"]
             if lead_ctx.get("company"):

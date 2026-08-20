@@ -1585,7 +1585,7 @@ def resolve_sender_identity(
     organization_id: int | None,
     actor_claims: dict[str, Any] | None = None,
     mailbox_id: int | None = None,
-) -> dict[str, str | None]:
+) -> dict[str, Any]:
     """Resolve tenant sender identity for draft generation.
 
     Shared mailbox identity wins over the user who clicked Run Outreach. The
@@ -1646,6 +1646,7 @@ def resolve_sender_identity(
         "sender_name": sender_name,
         "sender_company": sender_company,
         "mailbox_id": str(mailbox.get("id")) if mailbox else None,
+        "mailbox_signature_enabled": bool((mailbox or {}).get("signature_enabled")),
     }
 
 

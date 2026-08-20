@@ -31,10 +31,11 @@ Evaluate the response for:
 - Professional tone and language
 - Appropriate content for business context  
 - No inappropriate, offensive, or unprofessional content
-- Clear and helpful response to the inquiry
-- COMPLETENESS: Ensure the email does not end abruptly or have cut-off sentences.
-- SIGNATURE: Ensure the email ends with a professional signature.
-- SCHEDULING: ONLY for "meeting_request" intents, ensure the email mentions a calendar invite or link. For all other intents (question, interest, etc.), DO NOT check for scheduling info; focus purely on tone and accuracy.
+	- Clear and helpful response to the inquiry
+	- COMPLETENESS: Ensure the email does not end abruptly or have cut-off sentences.
+	- SIGNATURE: Ensure the email ends with a professional closing. If mailbox_signature_enabled is true, "Best," is enough because the mailbox signature is appended automatically at send time.
+	- SENDER IDENTITY: Reject responses that mention Euclid, Squad3, or Business Development Team unless that exact company is provided in the sender identity.
+	- SCHEDULING: ONLY for "meeting_request" intents, ensure the email mentions a calendar invite or link. For all other intents (question, interest, etc.), DO NOT check for scheduling info; focus purely on tone and accuracy.
 
 If the email is cut off (e.g., ends in the middle of a sentence like "doesn't"), you MUST reject it.
 
@@ -55,10 +56,16 @@ If the email is cut off (e.g., ends in the middle of a sentence like "doesn't"),
         subject = email_context.get('subject', '')
         intent = email_context.get('intent', 'unknown')
         attachment_context = email_context.get('attachment_context', '')
+        outbound_sender_name = email_context.get("outbound_sender_name", "")
+        outbound_sender_company = email_context.get("outbound_sender_company", "")
+        mailbox_signature_enabled = bool(email_context.get("mailbox_signature_enabled"))
         
         context = (
             f"Response: {response_text}\\n"
             f"Recipient: {sender_name} ({sender_email})\\n"
+            f"Outbound Sender Name: {outbound_sender_name}\\n"
+            f"Outbound Sender Company: {outbound_sender_company}\\n"
+            f"mailbox_signature_enabled: {str(mailbox_signature_enabled).lower()}\\n"
             f"Subject: {subject}\\n"
             f"Intent: {intent}\\n"
             f"Respondent attachment context: {attachment_context or 'None'}"
