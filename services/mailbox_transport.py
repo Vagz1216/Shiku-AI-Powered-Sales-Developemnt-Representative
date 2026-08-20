@@ -325,6 +325,8 @@ async def sync_unread_mailbox(
                     )
                     if callback:
                         await callback("warning", f"Skipping IMAP message from {sender_email}: {route['reason']}")
+                    if mark_seen:
+                        client.uid("STORE", uid, "+FLAGS", r"(\Seen)")
                     skipped.append(
                         {
                             "uid": uid_text,
@@ -515,6 +517,8 @@ async def _sync_unread_oauth_mailbox(
                 )
                 if callback:
                     await callback("warning", f"Skipping {mailbox['provider']} message from {sender_email}: {route['reason']}")
+                if mark_seen:
+                    mailbox_oauth_service.mark_message_seen(mailbox, provider_message_id)
                 skipped.append(
                     {
                         "uid": provider_message_id,

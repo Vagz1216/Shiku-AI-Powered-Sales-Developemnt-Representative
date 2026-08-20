@@ -1,5 +1,6 @@
 import sqlite3
 import datetime
+from email.message import EmailMessage
 
 import pytest
 
@@ -293,6 +294,84 @@ def test_smtp_send_prefers_configured_helo_hostname(monkeypatch):
     )
 
     assert captured["local_hostname"] == "mail.example.com"
+
+
+@pytest.mark.anyio
+async def test_sync_marks_skipped_imap_messages_seen(tmp_path, monkeypatch):
+    db_path = tmp_path / "mailbox-sync.sqlite3"
+    with _connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE email_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                organization_id INTEGER,
+                direction TEXT,
+                external_message_id TEXT
+            );
+            """
+        )
+
+    raw = EmailMessage()
+    raw["From"] = "Unknown <unknown@example.com>"
+    raw["To"] = "info@example.com"
+    raw["Subject"] = "Not a campaign reply"
+    raw["Message-ID"] = "<skip-test@example.com>"
+    raw.set_content("Hello")
+
+    class FakeIMAP:
+        def __init__(self):
+            self.seen_uids = []
+
+        def login(self, username, password):
+            pass
+
+        def select(self, mailbox):
+            pass
+
+        def uid(self, command, *args):
+            if command == "SEARCH":
+                return "OK", [b"101"]
+            if command == "FETCH":
+                return "OK", [(b"101 (BODY[])", raw.as_bytes())]
+            if command == "STORE":
+                self.seen_uids.append(args[0])
+                return "OK", []
+            raise AssertionError(command)
+
+        def logout(self):
+            pass
+
+    fake_imap = FakeIMAP()
+    monkeypatch.setattr(mailbox_transport, "get_conn", lambda: _connect(db_path))
+    monkeypatch.setattr(
+        mailbox_transport,
+        "_resolve_mailbox",
+        lambda mailbox_id=None, organization_id=None, provider=None: {
+            "id": 12,
+            "organization_id": organization_id or 1,
+            "provider": "smtp_imap",
+            "email_address": "info@example.com",
+            "imap_username": "info@example.com",
+            "imap_password_secret": "local:cGFzcw==",
+        },
+    )
+    monkeypatch.setattr(mailbox_transport, "_imap_client", lambda mailbox: fake_imap)
+    monkeypatch.setattr(
+        mailbox_transport,
+        "_route_inbound_sender",
+        lambda sender_email, organization_id=None: {
+            "process": False,
+            "reason": "sender is not a known lead",
+            "campaign_id": None,
+        },
+    )
+    monkeypatch.setattr(mailbox_transport, "_update_mailbox_sync_state", lambda mailbox_id, error: None)
+
+    result = await mailbox_transport.sync_unread_mailbox(organization_id=1, mailbox_id=12)
+
+    assert result["checked"] == 1
+    assert result["skipped"][0]["reason"] == "sender is not a known lead"
+    assert fake_imap.seen_uids == [b"101"]
 
 
 def test_list_connected_imap_mailboxes_filters_connected_smtp_imap(tmp_path, monkeypatch):
