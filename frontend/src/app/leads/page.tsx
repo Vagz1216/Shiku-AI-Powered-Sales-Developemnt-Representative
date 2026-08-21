@@ -161,6 +161,27 @@ function parseCampaignIds(value: string | null | undefined) {
     .filter((item) => Number.isFinite(item) && item > 0)
 }
 
+function splitStoredPhoneNumber(value: string | null | undefined) {
+  const original = String(value || '').trim()
+  if (!original) return { countryCode: '+1', phoneNumber: '' }
+
+  const compact = original.replace(/[\s().-]/g, '')
+  const normalized = compact.startsWith('00')
+    ? `+${compact.slice(2)}`
+    : compact.startsWith('+')
+      ? compact
+      : `+${compact}`
+  const countriesBySpecificity = [...COUNTRY_CODES].sort((a, b) => b.code.length - a.code.length)
+  const matchedCountry = countriesBySpecificity.find((country) => normalized.startsWith(country.code))
+
+  if (!matchedCountry) return { countryCode: '+1', phoneNumber: original }
+
+  return {
+    countryCode: matchedCountry.code,
+    phoneNumber: normalized.slice(matchedCountry.code.length),
+  }
+}
+
 function normalizeImportedLead(row: Record<string, unknown>) {
   const lowered = Object.fromEntries(
     Object.entries(row).map(([key, value]) => [key.trim().toLowerCase(), value])
@@ -372,22 +393,13 @@ export default function LeadsPage() {
 
   const startEdit = (lead: LeadRow) => {
     setEditingId(lead.id)
-    
-    let cc = '+1'
-    let phone = lead.phone_number || ''
-    for (const country of COUNTRY_CODES) {
-      if (phone.startsWith(country.code)) {
-        cc = country.code
-        phone = phone.substring(country.code.length).trim()
-        break
-      }
-    }
+    const { countryCode, phoneNumber } = splitStoredPhoneNumber(lead.phone_number)
 
     setForm({
       email: lead.email,
       name: lead.name || '',
-      country_code: cc,
-      phone_number: phone,
+      country_code: countryCode,
+      phone_number: phoneNumber,
       linkedin_url: lead.linkedin_url || '',
       company: lead.company || '',
       industry: lead.industry || '',
