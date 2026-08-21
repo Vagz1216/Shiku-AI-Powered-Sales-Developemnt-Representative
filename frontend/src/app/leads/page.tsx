@@ -172,7 +172,7 @@ function normalizeImportedLead(row: Record<string, unknown>) {
     }
     return ''
   }
-  return {
+  const normalized: Record<string, unknown> = {
     email: pick('email', 'email_address', 'work_email').toLowerCase(),
     name: pick('name', 'full_name', 'contact_name') || null,
     phone_number: pick('phone_number', 'phone', 'mobile') || null,
@@ -180,9 +180,22 @@ function normalizeImportedLead(row: Record<string, unknown>) {
     company: pick('company', 'company_name', 'account') || null,
     industry: pick('industry', 'sector') || null,
     pain_points: pick('pain_points', 'pain point', 'notes', 'description') || null,
+    job_title: pick('job_title', 'title', 'role', 'position') || null,
+    seniority: pick('seniority', 'level') || null,
+    location: pick('location', 'city', 'region') || null,
+    company_size: pick('company_size', 'employee_count', 'employees') || null,
+    company_website: pick('company_website', 'website', 'domain') || null,
+    company_description: pick('company_description', 'company_summary', 'about_company') || null,
+    recent_activity: pick('recent_activity', 'recent_news', 'activity') || null,
+    enrichment_source: pick('enrichment_source', 'source') || null,
+    icp_score: pick('icp_score') ? Number(pick('icp_score')) : null,
+    icp_rationale: pick('icp_rationale', 'icp_reason', 'fit_rationale') || null,
     status: (pick('status') || 'NEW').toUpperCase(),
     email_opt_out: ['1', 'true', 'yes', 'y'].includes(pick('email_opt_out', 'opt_out', 'unsubscribed').toLowerCase()),
   }
+  const campaignIds = parseCampaignIds(pick('campaign_ids', 'campaign id', 'campaign_ids_csv'))
+  if (campaignIds.length > 0) normalized.campaign_ids = campaignIds
+  return normalized
 }
 
 function parseCsv(text: string) {

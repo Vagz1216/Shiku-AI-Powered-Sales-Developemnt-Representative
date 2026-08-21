@@ -2997,10 +2997,14 @@ async def generate_due_followups(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _csv_stream(rows: list[dict[str, Any]], filename: str) -> StreamingResponse:
+def _csv_stream(
+    rows: list[dict[str, Any]],
+    filename: str,
+    fieldnames: list[str] | None = None,
+) -> StreamingResponse:
     buffer = io.StringIO()
-    fieldnames = sorted({key for row in rows for key in row.keys()})
-    writer = csv.DictWriter(buffer, fieldnames=fieldnames)
+    resolved_fieldnames = fieldnames or sorted({key for row in rows for key in row.keys()})
+    writer = csv.DictWriter(buffer, fieldnames=resolved_fieldnames, extrasaction="ignore")
     writer.writeheader()
     writer.writerows(rows)
     buffer.seek(0)
@@ -3011,9 +3015,40 @@ def _csv_stream(rows: list[dict[str, Any]], filename: str) -> StreamingResponse:
     )
 
 
+LEAD_EXPORT_COLUMNS = [
+    "id",
+    "email",
+    "name",
+    "phone_number",
+    "linkedin_url",
+    "company",
+    "industry",
+    "pain_points",
+    "job_title",
+    "seniority",
+    "location",
+    "company_size",
+    "company_website",
+    "company_description",
+    "recent_activity",
+    "enrichment_source",
+    "enrichment_updated_at",
+    "icp_score",
+    "icp_rationale",
+    "status",
+    "email_opt_out",
+    "touch_count",
+    "last_contacted_at",
+    "last_inbound_at",
+    "created_at",
+    "campaign_ids",
+    "campaigns",
+]
+
+
 @app.get("/api/leads/export.csv")
 async def export_leads_csv(user: dict = Depends(get_current_user), organization_id: Optional[int] = None):
-    """Export leads and campaign assignment context as CSV."""
+    """Export leads as an edit-friendly CSV with campaign assignment context."""
     try:
         from utils.db_connection import get_conn, sql_group_concat_distinct
 
@@ -3024,17 +3059,21 @@ async def export_leads_csv(user: dict = Depends(get_current_user), organization_
             rows = [
                 dict(row)
                 for row in conn.execute(
-                    "SELECT l.id, l.email, l.name, l.company, l.industry, l.pain_points, l.status, "
-                    "l.email_opt_out, l.touch_count, l.last_contacted_at, l.last_inbound_at, l.created_at, "
-                    f"{gcat_names} AS campaigns, {gcat_ids} AS campaign_ids "
+                    "SELECT l.id, l.email, l.name, l.phone_number, l.linkedin_url, l.company, "
+                    "l.industry, l.pain_points, l.job_title, l.seniority, l.location, "
+                    "l.company_size, l.company_website, l.company_description, "
+                    "l.recent_activity, l.enrichment_source, l.enrichment_updated_at, "
+                    "l.icp_score, l.icp_rationale, l.status, l.email_opt_out, "
+                    "l.touch_count, l.last_contacted_at, l.last_inbound_at, l.created_at, "
+                    f"{gcat_ids} AS campaign_ids, {gcat_names} AS campaigns "
                     "FROM leads l "
                     "LEFT JOIN campaign_leads cl ON cl.lead_id = l.id "
-                    "LEFT JOIN campaigns c ON c.id = cl.campaign_id "
+                    "LEFT JOIN campaigns c ON c.id = cl.campaign_id AND c.organization_id = l.organization_id "
                     "WHERE l.organization_id = ? GROUP BY l.id ORDER BY l.id DESC",
                     (resolved_org_id,),
                 ).fetchall()
             ]
-        return _csv_stream(rows, "leads-export.csv")
+        return _csv_stream(rows, "leads-export.csv", LEAD_EXPORT_COLUMNS)
     except Exception as e:
         logger.error(f"Failed to export leads: {e}")
         raise HTTPException(status_code=500, detail=str(e))

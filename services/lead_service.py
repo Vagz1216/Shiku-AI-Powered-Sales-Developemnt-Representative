@@ -35,11 +35,31 @@ def _normalize_email(email: str) -> str:
 
 
 def _bool_to_db(value: bool | int | None) -> int:
+    if isinstance(value, str):
+        return 1 if value.strip().lower() in {"1", "true", "yes", "y"} else 0
     return 1 if bool(value) else 0
 
 
+def _nullable_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    return int(value)
+
+
+def _normalize_campaign_ids(value: Any) -> list[int]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        value = re.split(r"[,;|]", value)
+    elif isinstance(value, int):
+        value = [value]
+    return sorted({int(cid) for cid in value if cid is not None and str(cid).strip()})
+
+
 def _assign_campaigns(conn, lead_id: int, campaign_ids: Iterable[int], *, organization_id: int, replace: bool = False) -> None:
-    ids = sorted({int(cid) for cid in campaign_ids if cid is not None})
+    ids = _normalize_campaign_ids(campaign_ids)
     if replace:
         conn.execute("DELETE FROM campaign_leads WHERE lead_id = ?", (lead_id,))
     if not ids:
@@ -104,7 +124,7 @@ def create_lead(data: Dict[str, Any], organization_id: int = 1) -> Dict[str, Any
     try:
         email = _normalize_email(data.get("email", ""))
         status = _normalize_status(data.get("status"))
-        campaign_ids = data.get("campaign_ids") or []
+        campaign_ids = _normalize_campaign_ids(data.get("campaign_ids"))
         with get_conn() as conn:
             with conn:
                 cur = conn.execute(
@@ -129,7 +149,7 @@ def create_lead(data: Dict[str, Any], organization_id: int = 1) -> Dict[str, Any
                         data.get("company_description"),
                         data.get("recent_activity"),
                         data.get("enrichment_source"),
-                        data.get("icp_score"),
+                        _nullable_int(data.get("icp_score")),
                         data.get("icp_rationale"),
                         status,
                         _bool_to_db(data.get("email_opt_out")),
@@ -242,7 +262,7 @@ def bulk_import_leads(
     updated = 0
     skipped = 0
     errors: list[dict[str, Any]] = []
-    campaign_ids = campaign_ids or []
+    campaign_ids = _normalize_campaign_ids(campaign_ids)
 
     try:
         with get_conn() as conn:
@@ -252,7 +272,11 @@ def bulk_import_leads(
                         email = _normalize_email(str(raw.get("email", "")))
                         status = _normalize_status(raw.get("status"))
                         row_campaign_ids = raw.get("campaign_ids")
-                        effective_campaign_ids = row_campaign_ids if row_campaign_ids is not None else campaign_ids
+                        effective_campaign_ids = (
+                            _normalize_campaign_ids(row_campaign_ids)
+                            if row_campaign_ids is not None
+                            else campaign_ids
+                        )
                         existing = conn.execute(
                             "SELECT id FROM leads WHERE email = ? AND organization_id = ?",
                             (email, organization_id),
@@ -287,7 +311,7 @@ def bulk_import_leads(
                                     raw.get("company_description"),
                                     raw.get("recent_activity"),
                                     raw.get("enrichment_source"),
-                                    raw.get("icp_score"),
+                                    _nullable_int(raw.get("icp_score")),
                                     raw.get("icp_rationale"),
                                     status,
                                     _bool_to_db(raw.get("email_opt_out")),
@@ -319,7 +343,7 @@ def bulk_import_leads(
                                     raw.get("company_description"),
                                     raw.get("recent_activity"),
                                     raw.get("enrichment_source"),
-                                    raw.get("icp_score"),
+                                    _nullable_int(raw.get("icp_score")),
                                     raw.get("icp_rationale"),
                                     status,
                                     _bool_to_db(raw.get("email_opt_out")),

@@ -129,6 +129,32 @@ def test_bulk_import_upserts_by_email(monkeypatch):
     assert row["company"] == "Analytical Engines"
 
 
+def test_bulk_import_accepts_export_style_campaign_ids_and_opt_out(monkeypatch):
+    conn = _conn()
+    monkeypatch.setattr(lead_service, "get_conn", lambda: DummyConn(conn))
+
+    result = lead_service.bulk_import_leads(
+        [
+            {
+                "email": "grace@example.com",
+                "name": "Grace",
+                "campaign_ids": "10",
+                "email_opt_out": "0",
+                "icp_score": "",
+            }
+        ],
+        source="csv-export",
+    )
+
+    lead = conn.execute("SELECT id, email_opt_out, icp_score FROM leads WHERE email = 'grace@example.com'").fetchone()
+    assignment = conn.execute("SELECT campaign_id FROM campaign_leads WHERE lead_id = ?", (lead["id"],)).fetchone()
+    assert result["success"] is True
+    assert result["data"]["created"] == 1
+    assert lead["email_opt_out"] == 0
+    assert lead["icp_score"] is None
+    assert assignment["campaign_id"] == 10
+
+
 def test_get_leads_excludes_pending_outbound_touches(monkeypatch):
     conn = _conn()
     monkeypatch.setattr(lead_service, "get_conn", lambda: DummyConn(conn))
