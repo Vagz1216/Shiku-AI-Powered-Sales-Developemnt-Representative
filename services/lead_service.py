@@ -15,6 +15,12 @@ from config.settings import settings
 
 VALID_STATUSES = {'NEW','CONTACTED','WARM','QUALIFIED','MEETING_PROPOSED','MEETING_BOOKED','COLD','OPTED_OUT'}
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+PHONE_COUNTRY_CODES = (
+    "254", "256", "255", "250", "234", "27", "20", "212", "233", "251", "260", "263", "244",
+    "971", "966", "974", "880", "62", "63", "65", "60", "66", "84", "82", "81", "86", "92",
+    "44", "61", "91", "49", "33", "39", "34", "31", "32", "41", "43", "46", "47", "45",
+    "358", "48", "90", "55", "52", "54", "57", "56", "51", "1",
+)
 
 def _now_iso():
     return datetime.datetime.utcnow().isoformat() + 'Z'
@@ -56,6 +62,26 @@ def _normalize_campaign_ids(value: Any) -> list[int]:
     elif isinstance(value, int):
         value = [value]
     return sorted({int(cid) for cid in value if cid is not None and str(cid).strip()})
+
+
+def _normalize_phone_number(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    compact = re.sub(r"[\s().-]+", "", text)
+    for code in sorted(PHONE_COUNTRY_CODES, key=len, reverse=True):
+        repeated_with_plus = f"+{code}{code}"
+        repeated_with_zeros = f"00{code}{code}"
+        repeated_without_plus = f"{code}{code}"
+        if compact.startswith(repeated_with_plus):
+            return f"+{code}{compact[len(repeated_with_plus):]}"
+        if compact.startswith(repeated_with_zeros):
+            return f"+{code}{compact[len(repeated_with_zeros):]}"
+        if compact.startswith(repeated_without_plus):
+            return f"+{code}{compact[len(repeated_without_plus):]}"
+    return text
 
 
 def _assign_campaigns(conn, lead_id: int, campaign_ids: Iterable[int], *, organization_id: int, replace: bool = False) -> None:
@@ -136,7 +162,7 @@ def create_lead(data: Dict[str, Any], organization_id: int = 1) -> Dict[str, Any
                         organization_id,
                         data.get("name"),
                         email,
-                        data.get("phone_number"),
+                        _normalize_phone_number(data.get("phone_number")),
                         data.get("linkedin_url"),
                         data.get("company"),
                         data.get("industry"),
@@ -201,6 +227,8 @@ def update_lead(lead_id: int, data: Dict[str, Any], organization_id: int = 1) ->
             value = data[field]
             if field == "email":
                 value = _normalize_email(value)
+            elif field == "phone_number":
+                value = _normalize_phone_number(value)
             elif field == "status":
                 value = _normalize_status(value)
             elif field == "email_opt_out":
@@ -298,7 +326,7 @@ def bulk_import_leads(
                                 "status = ?, email_opt_out = ? WHERE id = ? AND organization_id = ?",
                                 (
                                     raw.get("name"),
-                                    raw.get("phone_number"),
+                                    _normalize_phone_number(raw.get("phone_number")),
                                     raw.get("linkedin_url"),
                                     raw.get("company"),
                                     raw.get("industry"),
@@ -330,7 +358,7 @@ def bulk_import_leads(
                                     organization_id,
                                     raw.get("name"),
                                     email,
-                                    raw.get("phone_number"),
+                                    _normalize_phone_number(raw.get("phone_number")),
                                     raw.get("linkedin_url"),
                                     raw.get("company"),
                                     raw.get("industry"),

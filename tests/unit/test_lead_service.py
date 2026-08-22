@@ -155,6 +155,20 @@ def test_bulk_import_accepts_export_style_campaign_ids_and_opt_out(monkeypatch):
     assert assignment["campaign_id"] == 10
 
 
+def test_bulk_import_collapses_repeated_phone_country_code(monkeypatch):
+    conn = _conn()
+    monkeypatch.setattr(lead_service, "get_conn", lambda: DummyConn(conn))
+
+    result = lead_service.bulk_import_leads(
+        [{"email": "phone@example.com", "phone_number": "+254254707745837"}],
+        source="csv-export",
+    )
+
+    lead = conn.execute("SELECT phone_number FROM leads WHERE email = 'phone@example.com'").fetchone()
+    assert result["success"] is True
+    assert lead["phone_number"] == "+254707745837"
+
+
 def test_get_leads_excludes_pending_outbound_touches(monkeypatch):
     conn = _conn()
     monkeypatch.setattr(lead_service, "get_conn", lambda: DummyConn(conn))

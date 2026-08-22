@@ -182,6 +182,23 @@ function splitStoredPhoneNumber(value: string | null | undefined) {
   }
 }
 
+function buildStoredPhoneNumber(countryCode: string, phoneNumber: string) {
+  const compact = phoneNumber.trim().replace(/[\s().-]/g, '')
+  if (!compact) return null
+  if (compact.startsWith('+')) return compact
+  if (compact.startsWith('00')) return `+${compact.slice(2)}`
+
+  const selectedCountryDigits = countryCode.replace(/^\+/, '')
+  const withoutRepeatedCountryCode = compact.startsWith(selectedCountryDigits)
+    ? compact.slice(selectedCountryDigits.length)
+    : compact
+  const localNumber = countryCode === '+39'
+    ? withoutRepeatedCountryCode
+    : withoutRepeatedCountryCode.replace(/^0+/, '')
+
+  return localNumber ? `${countryCode}${localNumber}` : null
+}
+
 function normalizeImportedLead(row: Record<string, unknown>) {
   const lowered = Object.fromEntries(
     Object.entries(row).map(([key, value]) => [key.trim().toLowerCase(), value])
@@ -426,7 +443,7 @@ export default function LeadsPage() {
         body: JSON.stringify({
           ...restForm,
           name: restForm.name || null,
-          phone_number: restForm.phone_number ? `${country_code}${country_code === '+39' ? restForm.phone_number.trim() : restForm.phone_number.trim().replace(/^0+/, '')}` : null,
+          phone_number: buildStoredPhoneNumber(country_code, restForm.phone_number),
           linkedin_url: restForm.linkedin_url || null,
           company: restForm.company || null,
           industry: restForm.industry || null,
